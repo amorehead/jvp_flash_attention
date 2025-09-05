@@ -16,8 +16,8 @@ Plus modifications to support Jacobian-vector products (JVPs) and Hessian-vector
 - Reimplementing reference implementation as an autograd function with latest Triton tutorial optimizations, by Alex Birch.
 - Support for forward to receive tangents, so as to compute fwd and jvp together; autograd workaround, by Emily (nshepperd).
 - Support for function transforms (e.g., torch.func.jvp) via the use of setup_context, by Shih-Ying Yeh.
-- Support for sequence lengths 32 and 64; float32 and bfloat16 precision; comprehensive, length and dtype-stratified unit tests;
-    working backward hook w.r.t. tensor contiguity; HVP stress testing; and standardized docstrings and packaging, by Alex Morehead.
+- Support for sequence lengths 32 & 64; float32 & bfloat16 precision; comprehensive, length and dtype-stratified unit tests;
+    working backward hook w.r.t. tensor contiguity; HVP stress testing; standardized docstrings/packaging; and masking/dropout, by Alex Morehead.
 """
 
 from __future__ import annotations
@@ -201,48 +201,52 @@ def _attn_fwd_inner(
             t_k = tl.load(T_K_block_ptr)
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
 
-        # Load attention mask if provided
-        mask = None
-        if MASK_TYPE > 0:
+        # Load and apply attention mask if provided (before scaling for STAGE != 2)
+        if STAGE != 2 and MASK_TYPE > 0:
             mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
             if MASK_TYPE == 1:  # Boolean mask
                 mask = tl.load(mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX)
-                # Convert boolean to float: True (attend) -> 0, False (ignore) -> -1.0e6
-                # mask_value = tl.where(mask, 0.0, -1.0e6)
-                # qk += mask_value
-            else:  # MASK_TYPE == 2, Additive mask
+                # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
+                mask_value = tl.where(mask, 0.0, -1.0e6)
+                qk = qk * qk_scale + mask_value
+            elif MASK_TYPE == 2:  # Additive mask
                 mask = tl.load(
                     mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=0.0
                 )
-                # qk += mask
+                qk = qk * qk_scale + mask
+            else:
+                qk = qk * qk_scale
+            m_ij = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_ij[:, None]
+        elif STAGE == 2:
+            # For causal attention (STAGE == 2)
+            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
 
-        # Craft the full mask for attention
-        if STAGE == 2:
-            if MASK_TYPE == 0:
-                full_mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            if MASK_TYPE == 1:  # Boolean mask
-                full_mask = (mask == True) & (  # noqa: E712
-                    offs_m[:, None] >= (start_n + offs_n[None, :])
-                )
-            else:  # MASK_TYPE == 2, Additive mask
-                # NOTE: Here, we assume that only an additive mask value of `0.0` means "attend"
-                full_mask = (mask == 0.0) & (offs_m[:, None] >= (start_n + offs_n[None, :]))
+            # Apply additional mask if provided
+            if MASK_TYPE > 0:
+                mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
+                if MASK_TYPE == 1:  # Boolean mask
+                    add_mask = tl.load(mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX)
+                    # Only apply additional masking where causal mask allows attention
+                    mask_value = tl.where(add_mask, 0.0, -1.0e6)
+                    qk = tl.where(mask, qk + mask_value, qk)
+                elif MASK_TYPE == 2:  # Additive mask
+                    add_mask = tl.load(
+                        mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=0.0
+                    )
+                    qk = tl.where(mask, qk + add_mask, qk)
+
+            if ENABLE_JVP:
+                # Tangents should be masked with 0.0 since they represent derivatives
+                t_qk = tl.where(mask, t_qk, 0.0)
+            # TODO: Do we need a separate row maximum for qk_t?
+            m_ij = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_ij[:, None]
         else:
-            if MASK_TYPE == 0:
-                full_mask = tl.full([BLOCK_M, BLOCK_N], True, tl.int1)
-            if MASK_TYPE == 1:  # Boolean mask
-                full_mask = mask == True  # noqa: E712
-            else:  # MASK_TYPE == 2, Additive mask
-                # NOTE: Here, we assume that only an additive mask value of `0.0` means "attend"
-                full_mask = mask == 0.0
-
-        qk = qk * qk_scale + tl.where(full_mask, 0, -1.0e6)
-        if ENABLE_JVP:
-            # Claude says "tangents should be masked with 0.0 since they represent derivatives".
-            t_qk = tl.where(full_mask, t_qk, 0.0)
-        # TODO: Do we need a separate row maximum for qk_t?
-        m_ij = tl.maximum(m_i, tl.max(qk, 1))
-        qk -= m_ij[:, None]
+            # No masking case (STAGE != 2 and MASK_TYPE == 0)
+            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+            qk = qk * qk_scale - m_ij[:, None]
 
         p = tl.math.exp2(qk)
 
