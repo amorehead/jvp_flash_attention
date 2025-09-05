@@ -69,7 +69,7 @@ def is_blackwell():
 
 
 @triton.jit
-def dropout_mask(philox_seed, philox_offset, dropout_p, m, n, stride):
+def create_dropout_mask(philox_seed, philox_offset, dropout_p, m, n, stride):
     """Generate dropout mask using Philox RNG.
 
     Args:
@@ -200,19 +200,60 @@ def _attn_fwd_inner(
         if ENABLE_JVP:
             t_k = tl.load(T_K_block_ptr)
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
+
+        # Load attention mask if provided
+        mask = None
+        if MASK_TYPE > 0:
+            mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
+            if MASK_TYPE == 1:  # Boolean mask
+                mask = tl.load(mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX)
+                # Convert boolean to float: True (attend) -> 0, False (ignore) -> -1.0e6
+                # mask_value = tl.where(mask, 0.0, -1.0e6)
+                # qk += mask_value
+            else:  # MASK_TYPE == 2, Additive mask
+                mask = tl.load(
+                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=0.0
+                )
+                # qk += mask
+
+        # Craft the full mask for attention
         if STAGE == 2:
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
-            if ENABLE_JVP:
-                # Claude says "tangents should be masked with 0.0 since they represent derivatives".
-                t_qk = tl.where(mask, t_qk, 0.0)
-            # TODO: Do we need a separate row maximum for qk_t?
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
+            if MASK_TYPE == 0:
+                full_mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+            if MASK_TYPE == 1:  # Boolean mask
+                full_mask = (mask == True) & (  # noqa: E712
+                    offs_m[:, None] >= (start_n + offs_n[None, :])
+                )
+            else:  # MASK_TYPE == 2, Additive mask
+                # NOTE: Here, we assume that only an additive mask value of `0.0` means "attend"
+                full_mask = (mask == 0.0) & (offs_m[:, None] >= (start_n + offs_n[None, :]))
         else:
-            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_ij[:, None]
+            if MASK_TYPE == 0:
+                full_mask = tl.full([BLOCK_M, BLOCK_N], True, tl.int1)
+            if MASK_TYPE == 1:  # Boolean mask
+                full_mask = mask == True  # noqa: E712
+            else:  # MASK_TYPE == 2, Additive mask
+                # NOTE: Here, we assume that only an additive mask value of `0.0` means "attend"
+                full_mask = mask == 0.0
+
+        qk = qk * qk_scale + tl.where(full_mask, 0, -1.0e6)
+        if ENABLE_JVP:
+            # Claude says "tangents should be masked with 0.0 since they represent derivatives".
+            t_qk = tl.where(full_mask, t_qk, 0.0)
+        # TODO: Do we need a separate row maximum for qk_t?
+        m_ij = tl.maximum(m_i, tl.max(qk, 1))
+        qk -= m_ij[:, None]
+
         p = tl.math.exp2(qk)
+
+        # Apply dropout if enabled
+        if ENABLE_DROPOUT:
+            philox_offset = philox_offset_base + start_m * N_CTX + start_n
+            dropout_mask, dropout_scale = create_dropout_mask(
+                philox_seed, philox_offset, dropout_p, BLOCK_M, BLOCK_N, N_CTX
+            )
+            p = p * dropout_mask.to(dtype) * dropout_scale
+
         l_ij = tl.sum(p, 1)
         # -- Update m_i and l_i
         alpha = tl.math.exp2(m_i - m_ij)
