@@ -1660,18 +1660,18 @@ class JVPAttn(Function):
         """Forward pass for JVP Attention.
 
         Args:
-            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q)
-            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K)
-            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V)
-            q_t: Optional tensor for query transpose
-            k_t: Optional tensor for key transpose
-            v_t: Optional tensor for value transpose
-            attn_mask: Optional attention mask
-            dropout_p: Dropout probability
-            causal: Whether the attention is causal
-            sm_scale: Optional scaling factor for softmax
-            warp_specialize: Whether to use warp specialization
-            USE_TMA: Whether to use TMA
+            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
+            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K).
+            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V).
+            q_t: Optional tensor for query transpose.
+            k_t: Optional tensor for key transpose.
+            v_t: Optional tensor for value transpose.
+            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
+            dropout_p: Dropout probability.
+            causal: Whether the attention is causal.
+            sm_scale: Optional scaling factor for softmax.
+            warp_specialize: Whether to use warp specialization.
+            USE_TMA: Whether to use TMA.
 
         Returns:
             Outputs of JVP Attention.
@@ -1683,6 +1683,21 @@ class JVPAttn(Function):
         HEAD_DIM_V = v.shape[-1]
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
         assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+
+        if causal and attn_mask is not None:
+            raise ValueError("Causal attention does not support an attention mask.")
+        if attn_mask is not None:
+            assert attn_mask.shape == (
+                Z,
+                H,
+                N_CTX,
+                N_CTX,
+            ), "The provided attention mask must have 4 dimensions (Z, H, N_CTX, N_CTX)."
+            assert attn_mask.dtype in {
+                torch.bool,
+                q.dtype,
+            }, "The attention mask must be of the dtype bool or that of the query tensor."
+
         if sm_scale is None:
             sm_scale = HEAD_DIM_K**-0.5
         o = torch.empty_like(q)
@@ -1949,15 +1964,15 @@ class JVPAttn(Function):
         (e.g., due to an `unbind` call to create `q`, `k`, `v`) but nonetheless may incur a performance cost.
 
         Args:
-            q: The query tensor
-            k: The key tensor
-            v: The value tensor
-            attn_mask: Optional attention mask
-            dropout_p: Dropout probability
-            causal: Whether to use causal attention
-            sm_scale: The softmax scale factor
-            warp_specialize: Whether to use warp specialization
-            USE_TMA: Whether to use TMA
+            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
+            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K).
+            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V).
+            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
+            dropout_p: Dropout probability.
+            causal: Whether to use causal attention.
+            sm_scale: The softmax scale factor.
+            warp_specialize: Whether to use warp specialization.
+            USE_TMA: Whether to use TMA.
 
         Returns:
             The output tensor.
@@ -1999,15 +2014,15 @@ class JVPAttn(Function):
         JVPAttn::forward with the right arguments when you have a dual tensor input.
 
         Args:
-            q: The query tensor
-            k: The key tensor
-            v: The value tensor
-            attn_mask: Optional attention mask
-            dropout_p: Dropout probability
-            causal: Whether to use causal attention
-            sm_scale: The softmax scale factor
-            warp_specialize: Whether to use warp specialization
-            USE_TMA: Whether to use TMA
+            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
+            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K).
+            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V).
+            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
+            dropout_p: Dropout probability.
+            causal: Whether to use causal attention.
+            sm_scale: The softmax scale factor.
+            warp_specialize: Whether to use warp specialization.
+            USE_TMA: Whether to use TMA.
 
         Returns:
             The output tensor.
