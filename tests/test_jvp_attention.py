@@ -332,7 +332,7 @@ def create_attention_mask(
         # Create an additive mask with values to be added to attention scores
         # Use -inf for positions to ignore, 0 for positions to attend
         rand_mask = torch.rand(args.bsz, heads, seq_len, seq_len, device=device, generator=gen)
-        mask = torch.where(rand_mask > args.mask_prob, 0.0, -1e6)
+        mask = torch.where(rand_mask > args.mask_prob, 0.0, -float("inf"))
         # Convert to the target dtype
         mask = mask.to(dtype)
         return mask

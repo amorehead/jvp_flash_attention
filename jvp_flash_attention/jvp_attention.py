@@ -1193,14 +1193,12 @@ def _attn_bwd_dkdv(
     Q,
     k,
     v,
-    sm_scale,  #
     DO,  #
     M,
     D,  #
     # shared by Q/K/V/DO.
     stride_tok,
     stride_d,  #
-    H,
     N_CTX,
     BLOCK_M1: tl.constexpr,  #
     BLOCK_N1: tl.constexpr,  #
@@ -1226,13 +1224,11 @@ def _attn_bwd_dkdv(
         Q: Query tensor.
         k: Key tensor.
         v: Value tensor.
-        sm_scale: Scale factor for the softmax.
         DO: Gradient of the output tensor.
         M: Memory tensor.
         D: Delta tensor.
         stride_tok: Stride for the token dimension.
         stride_d: Stride for the head dimension.
-        H: Head dimension.
         N_CTX: Context length.
         BLOCK_M1: Block size for M dimension.
         BLOCK_N1: Block size for N dimension.
@@ -1272,13 +1268,13 @@ def _attn_bwd_dkdv(
         # Causal masking before exponentiation.
         if MASK:
             causal_mask = offs_m[None, :] >= offs_n[:, None]
-            qkT = tl.where(causal_mask, qkT, -1e6)
+            qkT = tl.where(causal_mask, qkT, -float("inf"))
         # External masking before exponentiation.
         if MASK_TYPE > 0:
             mask_offs = offs_m[None, :] * N_CTX + offs_n[:, None]
             if MASK_TYPE == 1:
                 mask = tl.load(mask_ptr + mask_offs)
-                qkT = tl.where(mask, qkT, -1e6)
+                qkT = tl.where(mask, qkT, -float("inf"))
             elif MASK_TYPE == 2:
                 add_mask = tl.load(mask_ptr + mask_offs)
                 qkT += add_mask
@@ -1300,6 +1296,8 @@ def _attn_bwd_dkdv(
         Di = tl.load(D + offs_m)
         # Compute dP and dS.
         dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
+        if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
+            dpT = dpT * dropout_mask.to(dpT.dtype) * dropout_scale
         dsT = pT * (dpT - Di[None, :])
         dsT = dsT.to(dtype)
         dk += tl.dot(dsT, tl.trans(qT).to(dtype)).to(qT.dtype)
@@ -1323,7 +1321,6 @@ def _attn_bwd_dq(
     # shared by Q/K/V/DO.
     stride_tok,
     stride_d,  #
-    H,
     N_CTX,  #
     BLOCK_M2: tl.constexpr,  #
     BLOCK_N2: tl.constexpr,  #
@@ -1353,7 +1350,6 @@ def _attn_bwd_dq(
         D: Delta tensor.
         stride_tok: Stride for the token dimension.
         stride_d: Stride for the head dimension.
-        H: Head dimension.
         N_CTX: Context length.
         BLOCK_M2: Block size for M dimension.
         BLOCK_N2: Block size for N dimension.
@@ -1386,20 +1382,20 @@ def _attn_bwd_dq(
     step_n = BLOCK_N2
     dtype = tl.float32  # For dot products
     for blk_idx in range(num_steps):
+        offs_n = curr_n + tl.arange(0, BLOCK_N2)
         kT = tl.load(kT_ptrs)
         vT = tl.load(vT_ptrs)
         qk = tl.dot(q, kT)
         # Causal masking before exponentiation.
         if MASK:
-            offs_n = curr_n + tl.arange(0, BLOCK_N2)
             causal_mask = offs_m[:, None] >= offs_n[None, :]
-            qk = tl.where(causal_mask, qk, -1e6)
+            qk = tl.where(causal_mask, qk, -float("inf"))
         # External masking before exponentiation.
         if MASK_TYPE > 0:
             mask_offs = offs_m[:, None] * N_CTX + offs_n[None, :]
             if MASK_TYPE == 1:
                 mask = tl.load(mask_ptr + mask_offs)
-                qk = tl.where(mask, qk, -1e6)
+                qk = tl.where(mask, qk, -float("inf"))
             elif MASK_TYPE == 2:
                 add_mask = tl.load(mask_ptr + mask_offs)
                 qk += add_mask
@@ -1414,6 +1410,8 @@ def _attn_bwd_dq(
             p = p * dropout_mask.to(p.dtype) * dropout_scale
         # Compute dP and dS.
         dp = tl.dot(do, vT).to(tl.float32)
+        if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
+            dp = dp * dropout_mask.to(dp.dtype) * dropout_scale
         ds = p * (dp - Di[:, None])
         ds = ds.to(dtype)
         # Compute dQ.
@@ -1534,13 +1532,11 @@ def _attn_bwd(
         Q,
         k,
         v,
-        sm_scale,  #
         DO,  #
         M,
         D,  #
         stride_tok,
         stride_d,  #
-        H,
         N_CTX,  #
         MASK_BLOCK_M1,
         BLOCK_N1,
@@ -1567,13 +1563,11 @@ def _attn_bwd(
         Q,
         k,
         v,
-        sm_scale,  #
         DO,  #
         M,
         D,  #
         stride_tok,
         stride_d,  #
-        H,
         N_CTX,  #
         BLOCK_M1,
         BLOCK_N1,
@@ -1628,7 +1622,6 @@ def _attn_bwd(
         D,  #
         stride_tok,
         stride_d,  #
-        H,
         N_CTX,  #
         BLOCK_M2,
         MASK_BLOCK_N2,
@@ -1657,7 +1650,6 @@ def _attn_bwd(
         D,  #
         stride_tok,
         stride_d,  #
-        H,
         N_CTX,  #
         BLOCK_M2,
         BLOCK_N2,
