@@ -205,15 +205,23 @@ def _attn_fwd_inner(
         if STAGE != 2 and MASK_TYPE > 0:
             mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
             if MASK_TYPE == 1:  # Boolean mask
-                mask = tl.load(mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX)
+                mask = tl.load(
+                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=False
+                )
                 # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
-                mask_value = tl.where(mask, 0.0, -1.0e6)
+                mask_value = tl.where(mask, 0.0, -1e6)
                 qk = qk * qk_scale + mask_value
+                if ENABLE_JVP:
+                    t_qk = tl.where(mask, t_qk, 0.0)
             elif MASK_TYPE == 2:  # Additive mask
                 mask = tl.load(
-                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=0.0
+                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=-1e6
                 )
                 qk = qk * qk_scale + mask
+                if ENABLE_JVP:
+                    # 'add_mask' is the additive mask loaded above (0.0 allowed, negative ~= -inf blocked)
+                    attend = mask == 0.0
+                    t_qk = tl.where(attend, t_qk, 0.0)
             else:
                 qk = qk * qk_scale
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
@@ -221,25 +229,31 @@ def _attn_fwd_inner(
         elif STAGE == 2:
             # For causal attention (STAGE == 2)
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+            qk = qk * qk_scale + tl.where(mask, 0, -1e6)
 
             # Apply additional mask if provided
             if MASK_TYPE > 0:
                 mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
                 if MASK_TYPE == 1:  # Boolean mask
-                    add_mask = tl.load(mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX)
+                    add_mask = tl.load(
+                        mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=False
+                    )
                     # Only apply additional masking where causal mask allows attention
-                    mask_value = tl.where(add_mask, 0.0, -1.0e6)
+                    mask_value = tl.where(add_mask, 0.0, -1e6)
                     qk = tl.where(mask, qk + mask_value, qk)
+                    if ENABLE_JVP:
+                        # Tangents should be masked with 0.0 since they represent derivatives
+                        t_qk = tl.where(add_mask, t_qk, 0.0)
                 elif MASK_TYPE == 2:  # Additive mask
                     add_mask = tl.load(
-                        mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=0.0
+                        mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=-1e6
                     )
                     qk = tl.where(mask, qk + add_mask, qk)
-
-            if ENABLE_JVP:
-                # Tangents should be masked with 0.0 since they represent derivatives
-                t_qk = tl.where(mask, t_qk, 0.0)
+                    if ENABLE_JVP:
+                        attend = add_mask == 0.0
+                        t_qk = tl.where(attend, t_qk, 0.0)
+                elif ENABLE_JVP:
+                    t_qk = tl.where(mask, t_qk, 0.0)
             # TODO: Do we need a separate row maximum for qk_t?
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
@@ -392,7 +406,7 @@ def _attn_fwd_inner_tma(
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+            qk = qk * qk_scale + tl.where(mask, 0, -1e6)
             if ENABLE_JVP:
                 # Claude says "tangents should be masked with 0.0 since they represent derivatives".
                 t_qk = tl.where(mask, t_qk, 0.0)
