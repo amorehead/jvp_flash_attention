@@ -460,7 +460,7 @@ If you use the code associated with this package or otherwise find this work use
   month = sep,
   title = {{JVP Flash Attention}},
   url = {https://github.com/amorehead/jvp_flash_attention},
-  version = {0.0.1},
+  version = {0.0.2},
   year = {2025}
 }
 ```
