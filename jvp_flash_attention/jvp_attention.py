@@ -40,6 +40,7 @@ try:
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
+MASK_CONST = -1e6  # Use -1e6 instead of -inf for numerical stability e.g., in fp16/bf16
 MIN_SEQUENCE_LENGTH = 32  # NOTE: All sequence lengths must be multiples of 2 >= 32
 
 
@@ -134,6 +135,7 @@ def _attn_fwd_inner(
     ENABLE_JVP: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     MASK_TYPE: tl.constexpr,  # 0: no mask, 1: boolean, 2: additive
+    MASK_CONST: tl.constexpr = MASK_CONST,
 ):
     """Inner forward pass for attention mechanism.
 
@@ -169,6 +171,7 @@ def _attn_fwd_inner(
         ENABLE_JVP: Whether to enable JVP (Jacobian-vector product).
         ENABLE_DROPOUT: Whether to enable dropout.
         MASK_TYPE: Type of attention mask (0: no mask, 1: boolean, 2: additive).
+        MASK_CONST: Constant value used for masking.
 
     Returns:
         The output tensors as a tuple.
@@ -209,18 +212,18 @@ def _attn_fwd_inner(
                     mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=False
                 )
                 # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
-                mask_value = tl.where(mask, 0.0, -1e6)
+                mask_value = tl.where(mask, 0.0, MASK_CONST)
                 qk = qk * qk_scale + mask_value
                 if ENABLE_JVP:
                     t_qk = tl.where(mask, t_qk, 0.0)
             elif MASK_TYPE == 2:  # Additive mask
                 mask = tl.load(
-                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=-1e6
+                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=MASK_CONST
                 )
                 qk = qk * qk_scale + mask
                 if ENABLE_JVP:
-                    # 'add_mask' is the additive mask loaded above (0.0 allowed, negative ~= -inf blocked)
-                    attend = mask == 0.0
+                    # 'add_mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
+                    attend = mask != MASK_CONST
                     t_qk = tl.where(attend, t_qk, 0.0)
             else:
                 qk = qk * qk_scale
@@ -229,7 +232,7 @@ def _attn_fwd_inner(
         elif STAGE == 2:
             # For causal attention (STAGE == 2)
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1e6)
+            qk = qk * qk_scale + tl.where(mask, 0, MASK_CONST)
 
             # Apply additional mask if provided
             if MASK_TYPE > 0:
@@ -239,18 +242,20 @@ def _attn_fwd_inner(
                         mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=False
                     )
                     # Only apply additional masking where causal mask allows attention
-                    mask_value = tl.where(add_mask, 0.0, -1e6)
+                    mask_value = tl.where(add_mask, 0.0, MASK_CONST)
                     qk = tl.where(mask, qk + mask_value, qk)
                     if ENABLE_JVP:
                         # Tangents should be masked with 0.0 since they represent derivatives
                         t_qk = tl.where(add_mask, t_qk, 0.0)
                 elif MASK_TYPE == 2:  # Additive mask
                     add_mask = tl.load(
-                        mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=-1e6
+                        mask_block_ptr + mask_offs,
+                        mask=mask_offs < N_CTX * N_CTX,
+                        other=MASK_CONST,
                     )
                     qk = tl.where(mask, qk + add_mask, qk)
                     if ENABLE_JVP:
-                        attend = add_mask == 0.0
+                        attend = add_mask != MASK_CONST
                         t_qk = tl.where(attend, t_qk, 0.0)
                 elif ENABLE_JVP:
                     t_qk = tl.where(mask, t_qk, 0.0)
@@ -347,6 +352,7 @@ def _attn_fwd_inner_tma(
     N_CTX: tl.constexpr,
     warp_specialize: tl.constexpr,
     ENABLE_JVP: tl.constexpr,
+    MASK_CONST: tl.constexpr = MASK_CONST,
 ):
     """Inner forward pass for attention mechanism with TMA (Tensor Memory Access) support.
 
@@ -377,6 +383,7 @@ def _attn_fwd_inner_tma(
         N_CTX: Context size.
         warp_specialize: Flag for warp specialization.
         ENABLE_JVP: Flag for enabling JVP.
+        MASK_CONST: Constant value used for masking.
 
     Returns:
         The output tensors as a tuple.
@@ -406,7 +413,7 @@ def _attn_fwd_inner_tma(
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1e6)
+            qk = qk * qk_scale + tl.where(mask, 0, MASK_CONST)
             if ENABLE_JVP:
                 # Claude says "tangents should be masked with 0.0 since they represent derivatives".
                 t_qk = tl.where(mask, t_qk, 0.0)
@@ -1229,6 +1236,7 @@ def _attn_bwd_dkdv(
     philox_seed,
     philox_offset_base,
     ENABLE_DROPOUT: tl.constexpr,
+    MASK_CONST: tl.constexpr = MASK_CONST,
 ):
     """The main inner-loop logic for computing dK and dV.
 
@@ -1258,6 +1266,7 @@ def _attn_bwd_dkdv(
         philox_seed: Seed for Philox RNG.
         philox_offset_base: Base offset for Philox RNG.
         ENABLE_DROPOUT: Flag to enable dropout.
+        MASK_CONST: Constant used for masking.
 
     Returns:
         dk: Gradient of the key tensor.
@@ -1282,16 +1291,15 @@ def _attn_bwd_dkdv(
         # Causal masking before exponentiation.
         if MASK:
             causal_mask = offs_m[None, :] >= offs_n[:, None]
-            qkT = tl.where(causal_mask, qkT, -float("inf"))
+            qkT = tl.where(causal_mask, qkT, MASK_CONST)
         # External masking before exponentiation.
         if MASK_TYPE > 0:
             mask_offs = offs_m[None, :] * N_CTX + offs_n[:, None]
+            mask = tl.load(mask_ptr + mask_offs)
             if MASK_TYPE == 1:
-                mask = tl.load(mask_ptr + mask_offs)
-                qkT = tl.where(mask, qkT, -float("inf"))
+                qkT = tl.where(mask, qkT, MASK_CONST)
             elif MASK_TYPE == 2:
-                add_mask = tl.load(mask_ptr + mask_offs)
-                qkT += add_mask
+                qkT += mask
         # Exponentiation.
         pT = tl.math.exp2(qkT - m[None, :])
         # Dropout after exponentiation.
@@ -1313,6 +1321,17 @@ def _attn_bwd_dkdv(
         if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
             dpT = dpT * dropout_mask.to(dpT.dtype) * dropout_scale
         dsT = pT * (dpT - Di[None, :])
+        # Apply mask to attention score gradients.
+        if MASK:
+            dsT = tl.where(causal_mask, dsT, 0.0)
+        if MASK_TYPE > 0:
+            mask_offs = offs_m[None, :] * N_CTX + offs_n[:, None]
+            mask = tl.load(mask_ptr + mask_offs)
+            if MASK_TYPE == 1:
+                dsT = tl.where(mask, dsT, 0.0)
+            elif MASK_TYPE == 2:
+                attend = mask != MASK_CONST
+                dsT = tl.where(attend, dsT, 0.0)
         dsT = dsT.to(dtype)
         dk += tl.dot(dsT, tl.trans(qT).to(dtype)).to(qT.dtype)
         # Increment pointers.
@@ -1351,6 +1370,7 @@ def _attn_bwd_dq(
     philox_seed,
     philox_offset_base,
     ENABLE_DROPOUT: tl.constexpr,
+    MASK_CONST: tl.constexpr = MASK_CONST,
 ):
     """The main inner-loop logic for computing dQ.
 
@@ -1379,6 +1399,7 @@ def _attn_bwd_dq(
         philox_seed: Seed for Philox RNG.
         philox_offset_base: Base offset for Philox RNG.
         ENABLE_DROPOUT: Flag to enable dropout.
+        MASK_CONST: Constant used for masking.
 
     Returns:
         dq: Gradient of the query tensor.
@@ -1403,16 +1424,15 @@ def _attn_bwd_dq(
         # Causal masking before exponentiation.
         if MASK:
             causal_mask = offs_m[:, None] >= offs_n[None, :]
-            qk = tl.where(causal_mask, qk, -float("inf"))
+            qk = tl.where(causal_mask, qk, MASK_CONST)
         # External masking before exponentiation.
         if MASK_TYPE > 0:
             mask_offs = offs_m[:, None] * N_CTX + offs_n[None, :]
+            mask = tl.load(mask_ptr + mask_offs)
             if MASK_TYPE == 1:
-                mask = tl.load(mask_ptr + mask_offs)
-                qk = tl.where(mask, qk, -float("inf"))
+                qk = tl.where(mask, qk, MASK_CONST)
             elif MASK_TYPE == 2:
-                add_mask = tl.load(mask_ptr + mask_offs)
-                qk += add_mask
+                qk += mask
         # Exponentiation.
         p = tl.math.exp2(qk - m)
         # Dropout after exponentiation.
@@ -1427,6 +1447,17 @@ def _attn_bwd_dq(
         if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
             dp = dp * dropout_mask.to(dp.dtype) * dropout_scale
         ds = p * (dp - Di[:, None])
+        # Apply mask to attention score gradients.
+        if MASK:
+            ds = tl.where(causal_mask, ds, 0.0)
+        if MASK_TYPE > 0:
+            mask_offs = offs_m[:, None] * N_CTX + offs_n[None, :]
+            mask = tl.load(mask_ptr + mask_offs)
+            if MASK_TYPE == 1:
+                ds = tl.where(mask, ds, 0.0)
+            elif MASK_TYPE == 2:
+                attend = mask != MASK_CONST
+                ds = tl.where(attend, ds, 0.0)
         ds = ds.to(dtype)
         # Compute dQ.
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.

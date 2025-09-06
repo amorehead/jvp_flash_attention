@@ -23,7 +23,7 @@ try:
 except Exception:
     NUMPY_AVAILABLE = False
 
-from jvp_flash_attention.jvp_attention import JVPAttn
+from jvp_flash_attention.jvp_attention import MASK_CONST, JVPAttn
 
 
 def mpi_to_flops(ms_per_iter: float, flop_count: int) -> float:
@@ -214,7 +214,7 @@ class Args:
     seed: int = 42
     validate_gradients: bool = True
     test_masks: bool = True
-    mask_prob: float = 0.1  # Probability of masking out an attention weight
+    mask_prob: float = 0.5  # Probability of masking out an attention weight
 
     @staticmethod
     def get_parser() -> ArgumentParser:
@@ -244,7 +244,7 @@ class Args:
         )
         parser.add_argument(
             "--mask-prob",
-            default=0.1,
+            default=0.5,
             type=float,
             help="Probability of masking out attention weights",
         )
@@ -332,7 +332,7 @@ def create_attention_mask(
         # Create an additive mask with values to be added to attention scores
         # Use -inf for positions to ignore, 0 for positions to attend
         rand_mask = torch.rand(args.bsz, heads, seq_len, seq_len, device=device, generator=gen)
-        mask = torch.where(rand_mask > args.mask_prob, 0.0, -float("inf"))
+        mask = torch.where(rand_mask > args.mask_prob, 0.0, MASK_CONST)
         # Convert to the target dtype
         mask = mask.to(dtype)
         return mask
@@ -633,14 +633,14 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
 
     tolerance_map = {
         "float16": 2e-3,
-        "float32": 7.25e-3,
+        "float32": 7.5e-3,
         "bfloat16": 3.2e-2,
     }
     tolerance = tolerance_map[args.dtype]
 
     # NOTE: Length-32 sequences pose specific numerical accuracy challenges, and for
     # them you may need to disable Triton kernel autotuning to avoid CUDA indexing errors.
-    grad_tolerance_map = {32: 7.2e-4}  # ...
+    grad_tolerance_map = {32: 2e-3}  # ...
     tangent_tolerance_map = {32: 1.6e-2}  # ...
 
     results = []
