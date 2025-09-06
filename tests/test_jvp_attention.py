@@ -504,6 +504,10 @@ def validate_accuracy_and_gradients(
         loss0 = loss_fn(sdpa_out, target)
         loss0.backward()
 
+        assert not any(
+            t.grad.isnan().any() or t.grad.isinf().any() for t in (q0, k0, v0)
+        ), "NaN/Inf in SDPA input gradients."
+
         # Run JVP Attention
         q1, k1, v1 = make_qkv_with_grad(
             q_p.clone(), k_p.clone(), v_p.clone(), q_t.clone(), k_t.clone(), v_t.clone()
@@ -515,6 +519,10 @@ def validate_accuracy_and_gradients(
 
         loss1 = loss_fn(jvp_out, target)
         loss1.backward()
+
+        assert not any(
+            t.grad.isnan().any() or t.grad.isinf().any() for t in (q1, k1, v1)
+        ), "NaN/Inf in JVP input gradients."
 
     mse_fn = MSELoss()
     with enable_grad():
@@ -537,6 +545,10 @@ def validate_accuracy_and_gradients(
         loss2.backward()
 
         q2, k2, v2 = qkv_p
+
+        assert not any(
+            t.grad.isnan().any() or t.grad.isinf().any() for t in (q2, k2, v2)
+        ), "NaN/Inf in JVP (func) input gradients."
 
     # Compute errors
     primal_error = compute_absolute_error(jvp_func_op, jvp_op, sdpa_op)

@@ -80,89 +80,89 @@ BENCHMARK SUMMARY
 ==============================================================================================================
 Seq Len    Causal   Mask       Method     Time (ms)    Mem (MB)     TFLOP/s      Max Error    Grad Check
 --------------------------------------------------------------------------------------------------------------
-32         False    additive   sdpa       0.788        0.64           0.0 TFLOP/s baseline     N/A
-32         False    additive   jvp_attn   0.496        0.23           0.0 TFLOP/s 1.95e-03     ✓
+32         False    additive   sdpa       0.785        0.64           0.0 TFLOP/s baseline     N/A
+32         False    additive   jvp_attn   0.475        0.23           0.0 TFLOP/s 1.95e-03     ✓
 
-32         False    boolean    sdpa       0.809        0.65           0.0 TFLOP/s baseline     N/A
-32         False    boolean    jvp_attn   0.488        0.22           0.0 TFLOP/s 1.95e-03     ✓
+32         False    boolean    sdpa       0.834        0.65           0.0 TFLOP/s baseline     N/A
+32         False    boolean    jvp_attn   0.469        0.22           0.0 TFLOP/s 1.95e-03     ✓
 
-32         False    none       sdpa       0.511        0.64           0.0 TFLOP/s baseline     N/A
-32         False    none       jvp_attn   0.493        0.22           0.0 TFLOP/s 1.95e-03     ✓
+32         False    none       sdpa       0.546        0.64           0.0 TFLOP/s baseline     N/A
+32         False    none       jvp_attn   0.465        0.22           0.0 TFLOP/s 1.95e-03     ✓
 
-32         True     none       sdpa       0.858        0.65           0.0 TFLOP/s baseline     N/A
-32         True     none       jvp_attn   0.501        0.22           0.0 TFLOP/s 1.95e-03     ✓
+32         True     none       sdpa       0.838        0.65           0.0 TFLOP/s baseline     N/A
+32         True     none       jvp_attn   0.464        0.22           0.0 TFLOP/s 1.95e-03     ✓
 
-64         False    additive   sdpa       0.809        1.41           0.0 TFLOP/s baseline     N/A
-64         False    additive   jvp_attn   0.502        0.47           0.0 TFLOP/s 9.77e-04     ✓
+64         False    additive   sdpa       0.790        1.41           0.0 TFLOP/s baseline     N/A
+64         False    additive   jvp_attn   0.487        0.47           0.0 TFLOP/s 9.77e-04     ✓
 
-64         False    boolean    sdpa       0.806        1.45           0.0 TFLOP/s baseline     N/A
-64         False    boolean    jvp_attn   0.488        0.43           0.0 TFLOP/s 9.77e-04     ✓
+64         False    boolean    sdpa       0.820        1.45           0.0 TFLOP/s baseline     N/A
+64         False    boolean    jvp_attn   0.473        0.43           0.0 TFLOP/s 9.77e-04     ✓
 
-64         False    none       sdpa       0.539        1.41           0.0 TFLOP/s baseline     N/A
-64         False    none       jvp_attn   0.494        0.43           0.0 TFLOP/s 9.77e-04     ✓
+64         False    none       sdpa       0.685        1.41           0.0 TFLOP/s baseline     N/A
+64         False    none       jvp_attn   0.474        0.43           0.0 TFLOP/s 9.77e-04     ✓
 
-64         True     none       sdpa       0.849        1.42           0.0 TFLOP/s baseline     N/A
-64         True     none       jvp_attn   0.479        0.43           0.0 TFLOP/s 1.95e-03     ✓
+64         True     none       sdpa       0.854        1.42           0.0 TFLOP/s baseline     N/A
+64         True     none       jvp_attn   0.499        0.43           0.0 TFLOP/s 1.95e-03     ✓
 
-128        False    additive   sdpa       0.803        3.28           0.0 TFLOP/s baseline     N/A
-128        False    additive   jvp_attn   0.488        1.02           0.1 TFLOP/s 9.77e-04     ✓
+128        False    additive   sdpa       0.769        3.28           0.0 TFLOP/s baseline     N/A
+128        False    additive   jvp_attn   0.494        1.02           0.1 TFLOP/s 9.77e-04     ✓
 
-128        False    boolean    sdpa       0.826        3.44           0.0 TFLOP/s baseline     N/A
-128        False    boolean    jvp_attn   0.472        0.86           0.1 TFLOP/s 9.77e-04     ✓
+128        False    boolean    sdpa       0.831        3.44           0.0 TFLOP/s baseline     N/A
+128        False    boolean    jvp_attn   0.468        0.86           0.1 TFLOP/s 9.77e-04     ✓
 
-128        False    none       sdpa       0.534        3.28           0.0 TFLOP/s baseline     N/A
-128        False    none       jvp_attn   0.519        0.86           0.1 TFLOP/s 9.77e-04     ✓
+128        False    none       sdpa       0.533        3.28           0.0 TFLOP/s baseline     N/A
+128        False    none       jvp_attn   0.470        0.86           0.1 TFLOP/s 9.77e-04     ✓
 
-128        True     none       sdpa       0.869        3.35           0.0 TFLOP/s baseline     N/A
-128        True     none       jvp_attn   0.497        0.86           0.0 TFLOP/s 1.95e-03     ✓
+128        True     none       sdpa       0.984        3.35           0.0 TFLOP/s baseline     N/A
+128        True     none       jvp_attn   0.483        0.86           0.0 TFLOP/s 1.95e-03     ✓
 
-256        False    additive   sdpa       0.861        9.69           0.1 TFLOP/s baseline     N/A
-256        False    additive   jvp_attn   0.511        2.35           0.3 TFLOP/s 9.77e-04     ✓
+256        False    additive   sdpa       1.142        9.69           0.1 TFLOP/s baseline     N/A
+256        False    additive   jvp_attn   0.473        2.35           0.4 TFLOP/s 9.77e-04     ✓
 
-256        False    boolean    sdpa       0.856        10.32          0.1 TFLOP/s baseline     N/A
-256        False    boolean    jvp_attn   0.494        1.72           0.3 TFLOP/s 9.77e-04     ✓
+256        False    boolean    sdpa       0.886        10.32          0.1 TFLOP/s baseline     N/A
+256        False    boolean    jvp_attn   0.466        1.72           0.4 TFLOP/s 9.77e-04     ✓
 
-256        False    none       sdpa       0.589        9.69           0.1 TFLOP/s baseline     N/A
-256        False    none       jvp_attn   0.476        1.72           0.4 TFLOP/s 9.77e-04     ✓
+256        False    none       sdpa       0.715        9.69           0.1 TFLOP/s baseline     N/A
+256        False    none       jvp_attn   0.472        1.72           0.4 TFLOP/s 9.77e-04     ✓
 
-256        True     none       sdpa       0.885        9.94           0.0 TFLOP/s baseline     N/A
-256        True     none       jvp_attn   0.480        1.72           0.2 TFLOP/s 1.95e-03     ✓
+256        True     none       sdpa       0.976        9.94           0.0 TFLOP/s baseline     N/A
+256        True     none       jvp_attn   0.464        1.72           0.2 TFLOP/s 1.95e-03     ✓
 
-512        False    additive   sdpa       1.003        31.88          0.3 TFLOP/s baseline     N/A
-512        False    additive   jvp_attn   0.508        5.95           1.3 TFLOP/s 4.88e-04     ✓
+512        False    additive   sdpa       1.399        31.88          0.2 TFLOP/s baseline     N/A
+512        False    additive   jvp_attn   0.481        5.95           1.4 TFLOP/s 4.88e-04     ✓
 
-512        False    boolean    sdpa       1.122        34.38          0.3 TFLOP/s baseline     N/A
-512        False    boolean    jvp_attn   0.515        3.45           1.3 TFLOP/s 4.88e-04     ✓
+512        False    boolean    sdpa       1.222        34.38          0.3 TFLOP/s baseline     N/A
+512        False    boolean    jvp_attn   0.489        3.45           1.4 TFLOP/s 4.88e-04     ✓
 
-512        False    none       sdpa       0.750        31.88          0.5 TFLOP/s baseline     N/A
-512        False    none       jvp_attn   0.496        3.45           1.4 TFLOP/s 4.88e-04     ✓
+512        False    none       sdpa       1.106        31.88          0.3 TFLOP/s baseline     N/A
+512        False    none       jvp_attn   0.475        3.45           1.4 TFLOP/s 4.88e-04     ✓
 
-512        True     none       sdpa       1.185        32.88          0.1 TFLOP/s baseline     N/A
-512        True     none       jvp_attn   0.496        3.45           0.7 TFLOP/s 1.95e-03     ✓
+512        True     none       sdpa       1.354        32.88          0.1 TFLOP/s baseline     N/A
+512        True     none       jvp_attn   0.493        3.45           0.7 TFLOP/s 1.95e-03     ✓
 
-1024       False    additive   sdpa       2.137        113.77         0.6 TFLOP/s baseline     N/A
-1024       False    additive   jvp_attn   0.503        16.89          5.4 TFLOP/s 4.88e-04     ✓
+1024       False    additive   sdpa       2.430        113.77         0.6 TFLOP/s baseline     N/A
+1024       False    additive   jvp_attn   0.480        16.89          5.7 TFLOP/s 4.88e-04     ✓
 
-1024       False    boolean    sdpa       2.166        123.77         0.6 TFLOP/s baseline     N/A
-1024       False    boolean    jvp_attn   0.516        6.89           5.3 TFLOP/s 4.88e-04     ✓
+1024       False    boolean    sdpa       2.889        123.77         0.5 TFLOP/s baseline     N/A
+1024       False    boolean    jvp_attn   0.483        6.89           5.7 TFLOP/s 4.88e-04     ✓
 
-1024       False    none       sdpa       1.934        113.77         0.7 TFLOP/s baseline     N/A
-1024       False    none       jvp_attn   0.520        6.89           5.3 TFLOP/s 4.88e-04     ✓
+1024       False    none       sdpa       2.457        113.77         0.6 TFLOP/s baseline     N/A
+1024       False    none       jvp_attn   0.467        6.89           5.9 TFLOP/s 4.88e-04     ✓
 
-1024       True     none       sdpa       2.169        117.77         0.3 TFLOP/s baseline     N/A
-1024       True     none       jvp_attn   0.493        6.89           2.8 TFLOP/s 1.95e-03     ✓
+1024       True     none       sdpa       2.670        117.77         0.3 TFLOP/s baseline     N/A
+1024       True     none       jvp_attn   0.500        6.89           2.7 TFLOP/s 1.95e-03     ✓
 
-2048       False    additive   sdpa       6.884        427.54         0.8 TFLOP/s baseline     N/A
-2048       False    additive   jvp_attn   0.702        53.79         15.6 TFLOP/s 2.44e-04     ✓
+2048       False    additive   sdpa       7.791        427.54         0.7 TFLOP/s baseline     N/A
+2048       False    additive   jvp_attn   0.696        53.79         15.7 TFLOP/s 2.44e-04     ✓
 
-2048       False    boolean    sdpa       6.992        467.54         0.8 TFLOP/s baseline     N/A
-2048       False    boolean    jvp_attn   0.566        13.79         19.3 TFLOP/s 2.44e-04     ✓
+2048       False    boolean    sdpa       7.673        467.54         0.7 TFLOP/s baseline     N/A
+2048       False    boolean    jvp_attn   0.755        13.79         14.5 TFLOP/s 2.44e-04     ✓
 
-2048       False    none       sdpa       5.820        427.54         0.9 TFLOP/s baseline     N/A
-2048       False    none       jvp_attn   0.507        13.79         21.6 TFLOP/s 2.44e-04     ✓
+2048       False    none       sdpa       7.773        427.54         0.7 TFLOP/s baseline     N/A
+2048       False    none       jvp_attn   0.614        13.79         17.8 TFLOP/s 2.44e-04     ✓
 
-2048       True     none       sdpa       6.906        443.54         0.4 TFLOP/s baseline     N/A
-2048       True     none       jvp_attn   0.522        13.79         10.5 TFLOP/s 1.95e-03     ✓
+2048       True     none       sdpa       8.609        443.54         0.3 TFLOP/s baseline     N/A
+2048       True     none       jvp_attn   0.464        13.79         11.8 TFLOP/s 1.95e-03     ✓
 
 
 ================================================================================
@@ -170,27 +170,27 @@ MASK TYPE PERFORMANCE COMPARISON
 ================================================================================
 Seq Len    Causal   Method     No Mask         Boolean Mask    Additive Mask
 --------------------------------------------------------------------------------
-32         False    jvp_attn   0.49 ms         0.49 ms (0.99x) 0.50 ms (1.01x)
-32         True     jvp_attn   0.50 ms         N/A             N/A
-64         False    jvp_attn   0.49 ms         0.49 ms (0.99x) 0.50 ms (1.02x)
-64         True     jvp_attn   0.48 ms         N/A             N/A
-128        False    jvp_attn   0.52 ms         0.47 ms (0.91x) 0.49 ms (0.94x)
-128        True     jvp_attn   0.50 ms         N/A             N/A
-256        False    jvp_attn   0.48 ms         0.49 ms (1.04x) 0.51 ms (1.07x)
-256        True     jvp_attn   0.48 ms         N/A             N/A
-512        False    jvp_attn   0.50 ms         0.52 ms (1.04x) 0.51 ms (1.02x)
-512        True     jvp_attn   0.50 ms         N/A             N/A
-1024       False    jvp_attn   0.52 ms         0.52 ms (0.99x) 0.50 ms (0.97x)
-1024       True     jvp_attn   0.49 ms         N/A             N/A
-2048       False    jvp_attn   0.51 ms         0.57 ms (1.12x) 0.70 ms (1.39x)
-2048       True     jvp_attn   0.52 ms         N/A             N/A
+32         False    jvp_attn   0.47 ms         0.47 ms (1.01x) 0.48 ms (1.02x)
+32         True     jvp_attn   0.46 ms         N/A             N/A
+64         False    jvp_attn   0.47 ms         0.47 ms (1.00x) 0.49 ms (1.03x)
+64         True     jvp_attn   0.50 ms         N/A             N/A
+128        False    jvp_attn   0.47 ms         0.47 ms (1.00x) 0.49 ms (1.05x)
+128        True     jvp_attn   0.48 ms         N/A             N/A
+256        False    jvp_attn   0.47 ms         0.47 ms (0.99x) 0.47 ms (1.00x)
+256        True     jvp_attn   0.46 ms         N/A             N/A
+512        False    jvp_attn   0.47 ms         0.49 ms (1.03x) 0.48 ms (1.01x)
+512        True     jvp_attn   0.49 ms         N/A             N/A
+1024       False    jvp_attn   0.47 ms         0.48 ms (1.03x) 0.48 ms (1.03x)
+1024       True     jvp_attn   0.50 ms         N/A             N/A
+2048       False    jvp_attn   0.61 ms         0.75 ms (1.23x) 0.70 ms (1.13x)
+2048       True     jvp_attn   0.46 ms         N/A             N/A
 
 ============================================================
 STATISTICS
 ============================================================
-Average speedup: 3.44x
-Min speedup: 1.03x
-Max speedup: 13.23x
+Average speedup: 4.00x
+Min speedup: 1.13x
+Max speedup: 18.54x
 
 Accuracy: 28/28 tests passed
 ✓ All accuracy checks passed!
@@ -204,89 +204,89 @@ BENCHMARK SUMMARY
 ==============================================================================================================
 Seq Len    Causal   Mask       Method     Time (ms)    Mem (MB)     TFLOP/s      Max Error    Grad Check
 --------------------------------------------------------------------------------------------------------------
-32         False    additive   sdpa       0.764        0.64           0.0 TFLOP/s baseline     N/A
-32         False    additive   jvp_attn   0.497        0.23           0.0 TFLOP/s 1.56e-02     ✓
+32         False    additive   sdpa       0.900        0.64           0.0 TFLOP/s baseline     N/A
+32         False    additive   jvp_attn   0.661        0.23           0.0 TFLOP/s 1.56e-02     ✓
 
-32         False    boolean    sdpa       0.786        0.65           0.0 TFLOP/s baseline     N/A
-32         False    boolean    jvp_attn   0.468        0.22           0.0 TFLOP/s 1.56e-02     ✓
+32         False    boolean    sdpa       0.883        0.65           0.0 TFLOP/s baseline     N/A
+32         False    boolean    jvp_attn   0.578        0.22           0.0 TFLOP/s 1.56e-02     ✓
 
-32         False    none       sdpa       0.494        0.64           0.0 TFLOP/s baseline     N/A
-32         False    none       jvp_attn   0.470        0.22           0.0 TFLOP/s 1.56e-02     ✓
+32         False    none       sdpa       0.603        0.64           0.0 TFLOP/s baseline     N/A
+32         False    none       jvp_attn   0.513        0.22           0.0 TFLOP/s 1.56e-02     ✓
 
-32         True     none       sdpa       0.850        0.65           0.0 TFLOP/s baseline     N/A
-32         True     none       jvp_attn   0.469        0.22           0.0 TFLOP/s 1.56e-02     ✓
+32         True     none       sdpa       0.915        0.65           0.0 TFLOP/s baseline     N/A
+32         True     none       jvp_attn   0.519        0.22           0.0 TFLOP/s 1.56e-02     ✓
 
-64         False    additive   sdpa       0.814        1.41           0.0 TFLOP/s baseline     N/A
-64         False    additive   jvp_attn   0.488        0.47           0.0 TFLOP/s 7.81e-03     ✓
+64         False    additive   sdpa       0.833        1.41           0.0 TFLOP/s baseline     N/A
+64         False    additive   jvp_attn   0.531        0.47           0.0 TFLOP/s 7.81e-03     ✓
 
-64         False    boolean    sdpa       0.916        1.45           0.0 TFLOP/s baseline     N/A
-64         False    boolean    jvp_attn   0.540        0.43           0.0 TFLOP/s 7.81e-03     ✓
+64         False    boolean    sdpa       0.870        1.45           0.0 TFLOP/s baseline     N/A
+64         False    boolean    jvp_attn   0.545        0.43           0.0 TFLOP/s 7.81e-03     ✓
 
-64         False    none       sdpa       0.515        1.41           0.0 TFLOP/s baseline     N/A
-64         False    none       jvp_attn   0.471        0.43           0.0 TFLOP/s 7.81e-03     ✓
+64         False    none       sdpa       0.565        1.41           0.0 TFLOP/s baseline     N/A
+64         False    none       jvp_attn   0.508        0.43           0.0 TFLOP/s 7.81e-03     ✓
 
-64         True     none       sdpa       0.821        1.42           0.0 TFLOP/s baseline     N/A
-64         True     none       jvp_attn   0.471        0.43           0.0 TFLOP/s 1.56e-02     ✓
+64         True     none       sdpa       0.939        1.42           0.0 TFLOP/s baseline     N/A
+64         True     none       jvp_attn   0.520        0.43           0.0 TFLOP/s 1.56e-02     ✓
 
-128        False    additive   sdpa       0.767        3.28           0.0 TFLOP/s baseline     N/A
-128        False    additive   jvp_attn   0.487        1.02           0.1 TFLOP/s 7.81e-03     ✓
+128        False    additive   sdpa       0.864        3.28           0.0 TFLOP/s baseline     N/A
+128        False    additive   jvp_attn   0.476        1.02           0.1 TFLOP/s 7.81e-03     ✓
 
-128        False    boolean    sdpa       0.821        3.44           0.0 TFLOP/s baseline     N/A
-128        False    boolean    jvp_attn   0.482        0.86           0.1 TFLOP/s 7.81e-03     ✓
+128        False    boolean    sdpa       0.839        3.44           0.0 TFLOP/s baseline     N/A
+128        False    boolean    jvp_attn   0.460        0.86           0.1 TFLOP/s 7.81e-03     ✓
 
-128        False    none       sdpa       0.506        3.28           0.0 TFLOP/s baseline     N/A
-128        False    none       jvp_attn   0.486        0.86           0.1 TFLOP/s 7.81e-03     ✓
+128        False    none       sdpa       0.798        3.28           0.0 TFLOP/s baseline     N/A
+128        False    none       jvp_attn   0.519        0.86           0.1 TFLOP/s 7.81e-03     ✓
 
-128        True     none       sdpa       0.843        3.35           0.0 TFLOP/s baseline     N/A
-128        True     none       jvp_attn   0.473        0.86           0.0 TFLOP/s 1.56e-02     ✓
+128        True     none       sdpa       0.886        3.35           0.0 TFLOP/s baseline     N/A
+128        True     none       jvp_attn   0.504        0.86           0.0 TFLOP/s 1.56e-02     ✓
 
-256        False    additive   sdpa       0.822        9.69           0.1 TFLOP/s baseline     N/A
-256        False    additive   jvp_attn   0.495        2.35           0.3 TFLOP/s 7.81e-03     ✓
+256        False    additive   sdpa       1.164        9.69           0.1 TFLOP/s baseline     N/A
+256        False    additive   jvp_attn   0.471        2.35           0.4 TFLOP/s 7.81e-03     ✓
 
-256        False    boolean    sdpa       0.849        10.32          0.1 TFLOP/s baseline     N/A
-256        False    boolean    jvp_attn   0.470        1.72           0.4 TFLOP/s 7.81e-03     ✓
+256        False    boolean    sdpa       0.918        10.32          0.1 TFLOP/s baseline     N/A
+256        False    boolean    jvp_attn   0.468        1.72           0.4 TFLOP/s 7.81e-03     ✓
 
-256        False    none       sdpa       0.602        9.69           0.1 TFLOP/s baseline     N/A
-256        False    none       jvp_attn   0.465        1.72           0.4 TFLOP/s 3.91e-03     ✓
+256        False    none       sdpa       0.780        9.69           0.1 TFLOP/s baseline     N/A
+256        False    none       jvp_attn   0.463        1.72           0.4 TFLOP/s 3.91e-03     ✓
 
-256        True     none       sdpa       1.028        9.94           0.0 TFLOP/s baseline     N/A
-256        True     none       jvp_attn   0.462        1.72           0.2 TFLOP/s 1.56e-02     ✓
+256        True     none       sdpa       1.187        9.94           0.0 TFLOP/s baseline     N/A
+256        True     none       jvp_attn   0.463        1.72           0.2 TFLOP/s 1.56e-02     ✓
 
-512        False    additive   sdpa       1.104        31.88          0.3 TFLOP/s baseline     N/A
-512        False    additive   jvp_attn   0.617        5.95           1.1 TFLOP/s 3.91e-03     ✓
+512        False    additive   sdpa       1.059        31.88          0.3 TFLOP/s baseline     N/A
+512        False    additive   jvp_attn   0.476        5.95           1.4 TFLOP/s 3.91e-03     ✓
 
-512        False    boolean    sdpa       1.158        34.38          0.3 TFLOP/s baseline     N/A
-512        False    boolean    jvp_attn   0.502        3.45           1.4 TFLOP/s 3.91e-03     ✓
+512        False    boolean    sdpa       1.053        34.38          0.3 TFLOP/s baseline     N/A
+512        False    boolean    jvp_attn   0.463        3.45           1.5 TFLOP/s 3.91e-03     ✓
 
-512        False    none       sdpa       0.924        31.88          0.4 TFLOP/s baseline     N/A
-512        False    none       jvp_attn   0.478        3.45           1.4 TFLOP/s 3.91e-03     ✓
+512        False    none       sdpa       1.131        31.88          0.3 TFLOP/s baseline     N/A
+512        False    none       jvp_attn   0.466        3.45           1.5 TFLOP/s 3.91e-03     ✓
 
-512        True     none       sdpa       0.935        32.88          0.2 TFLOP/s baseline     N/A
-512        True     none       jvp_attn   0.462        3.45           0.7 TFLOP/s 1.56e-02     ✓
+512        True     none       sdpa       1.651        32.88          0.1 TFLOP/s baseline     N/A
+512        True     none       jvp_attn   0.470        3.45           0.7 TFLOP/s 1.56e-02     ✓
 
-1024       False    additive   sdpa       2.151        113.77         0.6 TFLOP/s baseline     N/A
-1024       False    additive   jvp_attn   0.497        16.89          5.5 TFLOP/s 3.91e-03     ✓
+1024       False    additive   sdpa       2.525        113.77         0.5 TFLOP/s baseline     N/A
+1024       False    additive   jvp_attn   0.489        16.89          5.6 TFLOP/s 3.91e-03     ✓
 
-1024       False    boolean    sdpa       2.224        123.77         0.6 TFLOP/s baseline     N/A
-1024       False    boolean    jvp_attn   0.487        6.89           5.6 TFLOP/s 3.91e-03     ✓
+1024       False    boolean    sdpa       2.775        123.77         0.5 TFLOP/s baseline     N/A
+1024       False    boolean    jvp_attn   0.471        6.89           5.8 TFLOP/s 3.91e-03     ✓
 
-1024       False    none       sdpa       1.936        113.77         0.7 TFLOP/s baseline     N/A
-1024       False    none       jvp_attn   0.487        6.89           5.6 TFLOP/s 3.91e-03     ✓
+1024       False    none       sdpa       2.393        113.77         0.6 TFLOP/s baseline     N/A
+1024       False    none       jvp_attn   0.482        6.89           5.7 TFLOP/s 3.91e-03     ✓
 
-1024       True     none       sdpa       2.149        117.77         0.3 TFLOP/s baseline     N/A
-1024       True     none       jvp_attn   0.484        6.89           2.8 TFLOP/s 1.56e-02     ✓
+1024       True     none       sdpa       2.319        117.77         0.3 TFLOP/s baseline     N/A
+1024       True     none       jvp_attn   0.463        6.89           3.0 TFLOP/s 1.56e-02     ✓
 
-2048       False    additive   sdpa       6.891        427.54         0.8 TFLOP/s baseline     N/A
-2048       False    additive   jvp_attn   0.550        53.79         19.9 TFLOP/s 1.95e-03     ✓
+2048       False    additive   sdpa       8.504        427.54         0.6 TFLOP/s baseline     N/A
+2048       False    additive   jvp_attn   0.804        53.79         13.6 TFLOP/s 1.95e-03     ✓
 
-2048       False    boolean    sdpa       7.020        467.54         0.8 TFLOP/s baseline     N/A
-2048       False    boolean    jvp_attn   0.550        13.79         19.9 TFLOP/s 1.95e-03     ✓
+2048       False    boolean    sdpa       8.944        467.54         0.6 TFLOP/s baseline     N/A
+2048       False    boolean    jvp_attn   0.852        13.79         12.9 TFLOP/s 1.95e-03     ✓
 
-2048       False    none       sdpa       5.827        427.54         0.9 TFLOP/s baseline     N/A
-2048       False    none       jvp_attn   0.532        13.79         20.6 TFLOP/s 1.95e-03     ✓
+2048       False    none       sdpa       6.810        427.54         0.8 TFLOP/s baseline     N/A
+2048       False    none       jvp_attn   0.900        13.79         12.2 TFLOP/s 1.95e-03     ✓
 
-2048       True     none       sdpa       6.914        443.54         0.4 TFLOP/s baseline     N/A
-2048       True     none       jvp_attn   0.549        13.79         10.0 TFLOP/s 3.12e-02     ✓
+2048       True     none       sdpa       8.846        443.54         0.3 TFLOP/s baseline     N/A
+2048       True     none       jvp_attn   0.508        13.79         10.8 TFLOP/s 3.12e-02     ✓
 
 
 ================================================================================
@@ -294,27 +294,27 @@ MASK TYPE PERFORMANCE COMPARISON
 ================================================================================
 Seq Len    Causal   Method     No Mask         Boolean Mask    Additive Mask
 --------------------------------------------------------------------------------
-32         False    jvp_attn   0.47 ms         0.47 ms (1.00x) 0.50 ms (1.06x)
-32         True     jvp_attn   0.47 ms         N/A             N/A
-64         False    jvp_attn   0.47 ms         0.54 ms (1.15x) 0.49 ms (1.04x)
-64         True     jvp_attn   0.47 ms         N/A             N/A
-128        False    jvp_attn   0.49 ms         0.48 ms (0.99x) 0.49 ms (1.00x)
-128        True     jvp_attn   0.47 ms         N/A             N/A
-256        False    jvp_attn   0.47 ms         0.47 ms (1.01x) 0.49 ms (1.06x)
+32         False    jvp_attn   0.51 ms         0.58 ms (1.13x) 0.66 ms (1.29x)
+32         True     jvp_attn   0.52 ms         N/A             N/A
+64         False    jvp_attn   0.51 ms         0.54 ms (1.07x) 0.53 ms (1.05x)
+64         True     jvp_attn   0.52 ms         N/A             N/A
+128        False    jvp_attn   0.52 ms         0.46 ms (0.89x) 0.48 ms (0.92x)
+128        True     jvp_attn   0.50 ms         N/A             N/A
+256        False    jvp_attn   0.46 ms         0.47 ms (1.01x) 0.47 ms (1.02x)
 256        True     jvp_attn   0.46 ms         N/A             N/A
-512        False    jvp_attn   0.48 ms         0.50 ms (1.05x) 0.62 ms (1.29x)
-512        True     jvp_attn   0.46 ms         N/A             N/A
-1024       False    jvp_attn   0.49 ms         0.49 ms (1.00x) 0.50 ms (1.02x)
-1024       True     jvp_attn   0.48 ms         N/A             N/A
-2048       False    jvp_attn   0.53 ms         0.55 ms (1.04x) 0.55 ms (1.03x)
-2048       True     jvp_attn   0.55 ms         N/A             N/A
+512        False    jvp_attn   0.47 ms         0.46 ms (0.99x) 0.48 ms (1.02x)
+512        True     jvp_attn   0.47 ms         N/A             N/A
+1024       False    jvp_attn   0.48 ms         0.47 ms (0.98x) 0.49 ms (1.01x)
+1024       True     jvp_attn   0.46 ms         N/A             N/A
+2048       False    jvp_attn   0.90 ms         0.85 ms (0.95x) 0.80 ms (0.89x)
+2048       True     jvp_attn   0.51 ms         N/A             N/A
 
 ============================================================
 STATISTICS
 ============================================================
-Average speedup: 3.56x
-Min speedup: 1.04x
-Max speedup: 12.76x
+Average speedup: 3.75x
+Min speedup: 1.11x
+Max speedup: 17.40x
 
 Accuracy: 28/28 tests passed
 ✓ All accuracy checks passed!
@@ -329,88 +329,88 @@ BENCHMARK SUMMARY
 Seq Len    Causal   Mask       Method     Time (ms)    Mem (MB)     TFLOP/s      Max Error    Grad Check
 --------------------------------------------------------------------------------------------------------------
 32         False    additive   sdpa       0.724        0.51           0.0 TFLOP/s baseline     N/A
-32         False    additive   jvp_attn   0.495        0.45           0.0 TFLOP/s 7.21e-03     ✓
+32         False    additive   jvp_attn   0.523        0.45           0.0 TFLOP/s 7.21e-03     ✓
 
-32         False    boolean    sdpa       0.718        0.53           0.0 TFLOP/s baseline     N/A
-32         False    boolean    jvp_attn   0.487        0.43           0.0 TFLOP/s 7.21e-03     ✓
+32         False    boolean    sdpa       0.764        0.53           0.0 TFLOP/s baseline     N/A
+32         False    boolean    jvp_attn   0.500        0.43           0.0 TFLOP/s 7.21e-03     ✓
 
-32         False    none       sdpa       0.438        0.51           0.0 TFLOP/s baseline     N/A
-32         False    none       jvp_attn   0.484        0.43           0.0 TFLOP/s 7.22e-03     ✓
+32         False    none       sdpa       0.454        0.51           0.0 TFLOP/s baseline     N/A
+32         False    none       jvp_attn   0.521        0.43           0.0 TFLOP/s 7.22e-03     ✓
 
-32         True     none       sdpa       0.750        0.51           0.0 TFLOP/s baseline     N/A
-32         True     none       jvp_attn   0.475        0.43           0.0 TFLOP/s 6.18e-03     ✓
+32         True     none       sdpa       0.771        0.51           0.0 TFLOP/s baseline     N/A
+32         True     none       jvp_attn   0.530        0.43           0.0 TFLOP/s 6.18e-03     ✓
 
-64         False    additive   sdpa       0.697        1.09           0.0 TFLOP/s baseline     N/A
-64         False    additive   jvp_attn   0.475        0.94           0.0 TFLOP/s 7.17e-03     ✓
+64         False    additive   sdpa       0.731        1.09           0.0 TFLOP/s baseline     N/A
+64         False    additive   jvp_attn   0.503        0.94           0.0 TFLOP/s 7.17e-03     ✓
 
-64         False    boolean    sdpa       0.710        1.17           0.0 TFLOP/s baseline     N/A
-64         False    boolean    jvp_attn   0.474        0.86           0.0 TFLOP/s 7.17e-03     ✓
+64         False    boolean    sdpa       0.760        1.17           0.0 TFLOP/s baseline     N/A
+64         False    boolean    jvp_attn   0.501        0.86           0.0 TFLOP/s 7.17e-03     ✓
 
-64         False    none       sdpa       0.432        1.09           0.0 TFLOP/s baseline     N/A
-64         False    none       jvp_attn   0.478        0.86           0.0 TFLOP/s 7.03e-03     ✓
+64         False    none       sdpa       0.447        1.09           0.0 TFLOP/s baseline     N/A
+64         False    none       jvp_attn   0.497        0.86           0.0 TFLOP/s 7.03e-03     ✓
 
-64         True     none       sdpa       0.783        1.11           0.0 TFLOP/s baseline     N/A
-64         True     none       jvp_attn   0.471        0.86           0.0 TFLOP/s 6.18e-03     ✓
+64         True     none       sdpa       0.790        1.11           0.0 TFLOP/s baseline     N/A
+64         True     none       jvp_attn   0.507        0.86           0.0 TFLOP/s 6.18e-03     ✓
 
-128        False    additive   sdpa       0.755        2.81           0.0 TFLOP/s baseline     N/A
-128        False    additive   jvp_attn   0.523        2.03           0.1 TFLOP/s 5.41e-03     ✓
+128        False    additive   sdpa       0.702        2.81           0.0 TFLOP/s baseline     N/A
+128        False    additive   jvp_attn   0.494        2.03           0.1 TFLOP/s 5.41e-03     ✓
 
-128        False    boolean    sdpa       0.767        3.13           0.0 TFLOP/s baseline     N/A
-128        False    boolean    jvp_attn   0.508        1.72           0.1 TFLOP/s 5.41e-03     ✓
+128        False    boolean    sdpa       0.826        3.13           0.0 TFLOP/s baseline     N/A
+128        False    boolean    jvp_attn   0.478        1.72           0.1 TFLOP/s 5.41e-03     ✓
 
-128        False    none       sdpa       0.467        2.81           0.0 TFLOP/s baseline     N/A
-128        False    none       jvp_attn   0.497        1.72           0.1 TFLOP/s 5.07e-03     ✓
+128        False    none       sdpa       0.579        2.81           0.0 TFLOP/s baseline     N/A
+128        False    none       jvp_attn   0.514        1.72           0.1 TFLOP/s 5.07e-03     ✓
 
-128        True     none       sdpa       0.743        2.88           0.0 TFLOP/s baseline     N/A
-128        True     none       jvp_attn   0.467        1.72           0.0 TFLOP/s 6.18e-03     ✓
+128        True     none       sdpa       0.837        2.88           0.0 TFLOP/s baseline     N/A
+128        True     none       jvp_attn   0.537        1.72           0.0 TFLOP/s 6.18e-03     ✓
 
-256        False    additive   sdpa       0.745        8.75           0.1 TFLOP/s baseline     N/A
-256        False    additive   jvp_attn   0.495        4.69           0.3 TFLOP/s 3.41e-03     ✓
+256        False    additive   sdpa       0.687        8.75           0.1 TFLOP/s baseline     N/A
+256        False    additive   jvp_attn   0.481        4.69           0.4 TFLOP/s 3.41e-03     ✓
 
-256        False    boolean    sdpa       0.790        10.00          0.1 TFLOP/s baseline     N/A
-256        False    boolean    jvp_attn   0.522        3.44           0.3 TFLOP/s 3.41e-03     ✓
+256        False    boolean    sdpa       0.797        10.00          0.1 TFLOP/s baseline     N/A
+256        False    boolean    jvp_attn   0.506        3.44           0.3 TFLOP/s 3.41e-03     ✓
 
-256        False    none       sdpa       0.502        8.75           0.2 TFLOP/s baseline     N/A
-256        False    none       jvp_attn   0.487        3.44           0.4 TFLOP/s 3.67e-03     ✓
+256        False    none       sdpa       0.466        8.75           0.2 TFLOP/s baseline     N/A
+256        False    none       jvp_attn   0.474        3.44           0.4 TFLOP/s 3.67e-03     ✓
 
-256        True     none       sdpa       0.780        9.00           0.1 TFLOP/s baseline     N/A
-256        True     none       jvp_attn   0.487        3.44           0.2 TFLOP/s 5.78e-03     ✓
+256        True     none       sdpa       1.024        9.00           0.0 TFLOP/s baseline     N/A
+256        True     none       jvp_attn   0.496        3.44           0.2 TFLOP/s 5.78e-03     ✓
 
-512        False    additive   sdpa       1.013        30.01          0.3 TFLOP/s baseline     N/A
-512        False    additive   jvp_attn   0.503        11.88          1.4 TFLOP/s 3.09e-03     ✓
+512        False    additive   sdpa       0.982        30.01          0.3 TFLOP/s baseline     N/A
+512        False    additive   jvp_attn   0.515        11.88          1.3 TFLOP/s 3.09e-03     ✓
 
-512        False    boolean    sdpa       0.833        35.01          0.4 TFLOP/s baseline     N/A
-512        False    boolean    jvp_attn   0.485        6.88           1.4 TFLOP/s 3.09e-03     ✓
+512        False    boolean    sdpa       1.413        35.01          0.2 TFLOP/s baseline     N/A
+512        False    boolean    jvp_attn   0.487        6.88           1.4 TFLOP/s 3.09e-03     ✓
 
-512        False    none       sdpa       0.698        30.01          0.5 TFLOP/s baseline     N/A
-512        False    none       jvp_attn   0.489        6.88           1.4 TFLOP/s 2.88e-03     ✓
+512        False    none       sdpa       1.362        30.01          0.3 TFLOP/s baseline     N/A
+512        False    none       jvp_attn   0.481        6.88           1.4 TFLOP/s 2.88e-03     ✓
 
-512        True     none       sdpa       1.073        31.01          0.2 TFLOP/s baseline     N/A
-512        True     none       jvp_attn   0.496        6.88           0.7 TFLOP/s 5.13e-03     ✓
+512        True     none       sdpa       0.968        31.01          0.2 TFLOP/s baseline     N/A
+512        True     none       jvp_attn   0.481        6.88           0.7 TFLOP/s 5.13e-03     ✓
 
-1024       False    additive   sdpa       2.139        110.02         0.6 TFLOP/s baseline     N/A
-1024       False    additive   jvp_attn   0.526        33.77          5.2 TFLOP/s 2.84e-03     ✓
+1024       False    additive   sdpa       2.381        110.02         0.6 TFLOP/s baseline     N/A
+1024       False    additive   jvp_attn   0.708        33.77          3.9 TFLOP/s 2.84e-03     ✓
 
-1024       False    boolean    sdpa       2.092        130.02         0.7 TFLOP/s baseline     N/A
-1024       False    boolean    jvp_attn   0.529        13.77          5.2 TFLOP/s 2.84e-03     ✓
+1024       False    boolean    sdpa       3.475        130.02         0.4 TFLOP/s baseline     N/A
+1024       False    boolean    jvp_attn   0.593        13.77          4.6 TFLOP/s 2.84e-03     ✓
 
-1024       False    none       sdpa       1.845        110.02         0.7 TFLOP/s baseline     N/A
-1024       False    none       jvp_attn   0.503        13.77          5.4 TFLOP/s 2.61e-03     ✓
+1024       False    none       sdpa       2.246        110.02         0.6 TFLOP/s baseline     N/A
+1024       False    none       jvp_attn   0.488        13.77          5.6 TFLOP/s 2.61e-03     ✓
 
-1024       True     none       sdpa       2.107        115.02         0.3 TFLOP/s baseline     N/A
-1024       True     none       jvp_attn   0.523        13.77          2.6 TFLOP/s 5.61e-03     ✓
+1024       True     none       sdpa       2.700        115.02         0.3 TFLOP/s baseline     N/A
+1024       True     none       jvp_attn   0.531        13.77          2.6 TFLOP/s 5.61e-03     ✓
 
-2048       False    additive   sdpa       6.535        420.04         0.8 TFLOP/s baseline     N/A
-2048       False    additive   jvp_attn   0.893        107.54        12.3 TFLOP/s 1.57e-03     ✓
+2048       False    additive   sdpa       8.094        420.04         0.7 TFLOP/s baseline     N/A
+2048       False    additive   jvp_attn   1.274        107.54         8.6 TFLOP/s 1.57e-03     ✓
 
-2048       False    boolean    sdpa       6.656        500.04         0.8 TFLOP/s baseline     N/A
-2048       False    boolean    jvp_attn   1.167        27.54          9.4 TFLOP/s 1.57e-03     ✓
+2048       False    boolean    sdpa       7.980        500.04         0.7 TFLOP/s baseline     N/A
+2048       False    boolean    jvp_attn   1.332        27.54          8.2 TFLOP/s 1.57e-03     ✓
 
-2048       False    none       sdpa       4.616        420.04         1.2 TFLOP/s baseline     N/A
-2048       False    none       jvp_attn   0.759        27.54         14.4 TFLOP/s 1.56e-03     ✓
+2048       False    none       sdpa       6.471        420.04         0.8 TFLOP/s baseline     N/A
+2048       False    none       jvp_attn   1.345        27.54          8.1 TFLOP/s 1.56e-03     ✓
 
-2048       True     none       sdpa       6.348        436.04         0.4 TFLOP/s baseline     N/A
-2048       True     none       jvp_attn   0.553        27.54          9.9 TFLOP/s 6.47e-03     ✓
+2048       True     none       sdpa       8.308        436.04         0.3 TFLOP/s baseline     N/A
+2048       True     none       jvp_attn   0.749        27.54          7.3 TFLOP/s 6.47e-03     ✓
 
 
 ================================================================================
@@ -418,27 +418,27 @@ MASK TYPE PERFORMANCE COMPARISON
 ================================================================================
 Seq Len    Causal   Method     No Mask         Boolean Mask    Additive Mask
 --------------------------------------------------------------------------------
-32         False    jvp_attn   0.48 ms         0.49 ms (1.00x) 0.50 ms (1.02x)
-32         True     jvp_attn   0.48 ms         N/A             N/A
-64         False    jvp_attn   0.48 ms         0.47 ms (0.99x) 0.47 ms (0.99x)
-64         True     jvp_attn   0.47 ms         N/A             N/A
-128        False    jvp_attn   0.50 ms         0.51 ms (1.02x) 0.52 ms (1.05x)
-128        True     jvp_attn   0.47 ms         N/A             N/A
-256        False    jvp_attn   0.49 ms         0.52 ms (1.07x) 0.49 ms (1.01x)
-256        True     jvp_attn   0.49 ms         N/A             N/A
-512        False    jvp_attn   0.49 ms         0.49 ms (0.99x) 0.50 ms (1.03x)
-512        True     jvp_attn   0.50 ms         N/A             N/A
-1024       False    jvp_attn   0.50 ms         0.53 ms (1.05x) 0.53 ms (1.04x)
-1024       True     jvp_attn   0.52 ms         N/A             N/A
-2048       False    jvp_attn   0.76 ms         1.17 ms (1.54x) 0.89 ms (1.18x)
-2048       True     jvp_attn   0.55 ms         N/A             N/A
+32         False    jvp_attn   0.52 ms         0.50 ms (0.96x) 0.52 ms (1.00x)
+32         True     jvp_attn   0.53 ms         N/A             N/A
+64         False    jvp_attn   0.50 ms         0.50 ms (1.01x) 0.50 ms (1.01x)
+64         True     jvp_attn   0.51 ms         N/A             N/A
+128        False    jvp_attn   0.51 ms         0.48 ms (0.93x) 0.49 ms (0.96x)
+128        True     jvp_attn   0.54 ms         N/A             N/A
+256        False    jvp_attn   0.47 ms         0.51 ms (1.07x) 0.48 ms (1.01x)
+256        True     jvp_attn   0.50 ms         N/A             N/A
+512        False    jvp_attn   0.48 ms         0.49 ms (1.01x) 0.52 ms (1.07x)
+512        True     jvp_attn   0.48 ms         N/A             N/A
+1024       False    jvp_attn   0.49 ms         0.59 ms (1.22x) 0.71 ms (1.45x)
+1024       True     jvp_attn   0.53 ms         N/A             N/A
+2048       False    jvp_attn   1.34 ms         1.33 ms (0.99x) 1.27 ms (0.95x)
+2048       True     jvp_attn   0.75 ms         N/A             N/A
 
 ============================================================
 STATISTICS
 ============================================================
-Average speedup: 2.70x
-Min speedup: 0.90x
-Max speedup: 11.49x
+Average speedup: 2.83x
+Min speedup: 0.87x
+Max speedup: 11.09x
 
 Accuracy: 28/28 tests passed
 ✓ All accuracy checks passed!
