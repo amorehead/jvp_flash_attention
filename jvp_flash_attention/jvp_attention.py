@@ -2023,6 +2023,8 @@ class JVPAttn(Function):
                 **extra_kern_args,
             )
 
+        # TODO: Decide whether `0` is the right philox_offset here
+        philox_offset = 0
         return JVPAttn.FwdOut(
             o,
             JVPAttn.FwdOutCtxContrib(
@@ -2035,7 +2037,7 @@ class JVPAttn(Function):
                 MASK_TYPE,
                 dropout_p,
                 philox_seed,
-                0,
+                philox_offset,
                 ENABLE_DROPOUT,
             ),
         )
