@@ -1325,8 +1325,6 @@ def _attn_bwd_dkdv(
         if MASK:
             dsT = tl.where(causal_mask, dsT, 0.0)
         if MASK_TYPE > 0:
-            mask_offs = offs_m[None, :] * N_CTX + offs_n[:, None]
-            mask = tl.load(mask_ptr + mask_offs)
             if MASK_TYPE == 1:
                 dsT = tl.where(mask, dsT, 0.0)
             elif MASK_TYPE == 2:
@@ -1451,8 +1449,6 @@ def _attn_bwd_dq(
         if MASK:
             ds = tl.where(causal_mask, ds, 0.0)
         if MASK_TYPE > 0:
-            mask_offs = offs_m[:, None] * N_CTX + offs_n[None, :]
-            mask = tl.load(mask_ptr + mask_offs)
             if MASK_TYPE == 1:
                 ds = tl.where(mask, ds, 0.0)
             elif MASK_TYPE == 2:
