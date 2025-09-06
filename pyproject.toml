@@ -1,12 +1,12 @@
 [project]
 name = "jvp_flash_attention"
-version = "0.0.1"
+version = "0.0.2"
 description = "Flash Attention Triton kernel with support for second-order derivatives"
 authors = [
     { name = "Alex Morehead", email = "alex.morehead@gmail.edu" }
 ]
 readme = "README.md"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10"
 license = "MIT"
 keywords = [
     'artificial intelligence',

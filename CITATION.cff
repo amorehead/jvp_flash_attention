@@ -2,11 +2,11 @@ cff-version: 1.2.0
 message: "If you want to cite the kernel, feel free to use this (but only if you loved it 😊)"
 title: "JVP Flash Attention"
 abstract: "A Flash Attention Triton kernel with support for second-order derivatives, such as Jacobian-Vector Products (JVPs) and Hessian-Vector Products (HVPs)."
-date-released: 2025-09-03
+date-released: 2025-09-05
 authors:
   - family-names: "Morehead"
     given-names: "Alex"
-version: 0.0.1
+version: 0.0.2
 doi: 10.5281/zenodo.17050188
 license: "MIT"
 url: "https://zenodo.org/records/17050188"
