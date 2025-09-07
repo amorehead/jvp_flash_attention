@@ -220,8 +220,8 @@ class Args:
     def get_parser() -> ArgumentParser:
         """Get the argument parser for training."""
         parser = ArgumentParser()
-        parser.add_argument("--bsz", default=1, type=int)
-        parser.add_argument("--model-dim", default=320, type=int)
+        parser.add_argument("--bsz", default=2, type=int)
+        parser.add_argument("--model-dim", default=768, type=int)
         parser.add_argument("--head-dim", default=64, type=int)
         parser.add_argument(
             "--seq-lengths", nargs="+", type=int, default=[32, 64, 128, 256, 512, 1024, 2048]
