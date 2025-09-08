@@ -1788,6 +1788,11 @@ class JVPAttn(Function):
         Returns:
             Outputs of JVP Attention.
         """
+        if attn_mask is not None:
+            raise NotImplementedError("JVP attention does not support attention masks yet.")
+        if dropout_p != 0.0:
+            raise NotImplementedError("JVP attention does not support attention dropout yet.")
+
         # Shape constraints
         Z, H, N_CTX, HEAD_DIM_Q = q.shape
         HEAD_DIM_K = k.shape[-1]

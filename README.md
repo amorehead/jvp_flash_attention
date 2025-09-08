@@ -55,8 +55,8 @@ with sdpa_kernel(SDPBackend.MATH):
       q,
       k,
       v,
-      attn_mask=attn_mask,
-      dropout_p=attn_dropout_p if self.training else 0.0,
+      # attn_mask=attn_mask,  # NOTE: Attention masking is temporarily unsupported
+      # dropout_p=attn_dropout_p if self.training else 0.0,  # NOTE: Attention dropout is currently unsupported
   )
 ```
 
@@ -460,7 +460,7 @@ If you use the code associated with this package or otherwise find this work use
   month = sep,
   title = {{JVP Flash Attention}},
   url = {https://github.com/amorehead/jvp_flash_attention},
-  version = {0.0.2},
+  version = {0.0.3},
   year = {2025}
 }
 ```

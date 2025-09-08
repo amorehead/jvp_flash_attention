@@ -6,7 +6,7 @@ date-released: 2025-09-05
 authors:
   - family-names: "Morehead"
     given-names: "Alex"
-version: 0.0.2
+version: 0.0.3
 doi: 10.5281/zenodo.17050188
 license: "MIT"
 url: "https://zenodo.org/records/17050188"
