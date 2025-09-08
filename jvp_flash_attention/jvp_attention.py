@@ -1321,15 +1321,15 @@ def _attn_bwd_dkdv(
         if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
             dpT = dpT * dropout_mask.to(dpT.dtype) * dropout_scale
         dsT = pT * (dpT - Di[None, :])
-        # Apply mask to attention score gradients.
-        if MASK:
-            dsT = tl.where(causal_mask, dsT, 0.0)
-        if MASK_TYPE > 0:
-            if MASK_TYPE == 1:
-                dsT = tl.where(mask, dsT, 0.0)
-            elif MASK_TYPE == 2:
-                attend = mask != MASK_CONST
-                dsT = tl.where(attend, dsT, 0.0)
+        # # Apply mask to attention score gradients.
+        # if MASK:
+        #     dsT = tl.where(causal_mask, dsT, 0.0)
+        # if MASK_TYPE > 0:
+        #     if MASK_TYPE == 1:
+        #         dsT = tl.where(mask, dsT, 0.0)
+        #     elif MASK_TYPE == 2:
+        #         attend = mask != MASK_CONST
+        #         dsT = tl.where(attend, dsT, 0.0)
         dsT = dsT.to(dtype)
         dk += tl.dot(dsT, tl.trans(qT).to(dtype)).to(qT.dtype)
         # Increment pointers.
@@ -1445,15 +1445,15 @@ def _attn_bwd_dq(
         if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
             dp = dp * dropout_mask.to(dp.dtype) * dropout_scale
         ds = p * (dp - Di[:, None])
-        # Apply mask to attention score gradients.
-        if MASK:
-            ds = tl.where(causal_mask, ds, 0.0)
-        if MASK_TYPE > 0:
-            if MASK_TYPE == 1:
-                ds = tl.where(mask, ds, 0.0)
-            elif MASK_TYPE == 2:
-                attend = mask != MASK_CONST
-                ds = tl.where(attend, ds, 0.0)
+        # # Apply mask to attention score gradients.
+        # if MASK:
+        #     ds = tl.where(causal_mask, ds, 0.0)
+        # if MASK_TYPE > 0:
+        #     if MASK_TYPE == 1:
+        #         ds = tl.where(mask, ds, 0.0)
+        #     elif MASK_TYPE == 2:
+        #         attend = mask != MASK_CONST
+        #         ds = tl.where(attend, ds, 0.0)
         ds = ds.to(dtype)
         # Compute dQ.
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
