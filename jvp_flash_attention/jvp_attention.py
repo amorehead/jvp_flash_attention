@@ -576,11 +576,11 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
         return tl.make_tensor_descriptor(desc_or_ptr, shape, strides, block_shape)
 
 
-@triton.autotune(
-    configs=list(filter(keep, configs)),
-    key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
-    prune_configs_by={"early_config_prune": prune_invalid_configs},
-)
+# @triton.autotune(
+#     configs=list(filter(keep, configs)),
+#     key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
+#     prune_configs_by={"early_config_prune": prune_invalid_configs},
+# )
 @triton.jit
 def _attn_fwd(
     Q,
@@ -956,11 +956,11 @@ def keep_tma(conf):
     )
 
 
-@triton.autotune(
-    configs=list(filter(keep_tma, configs_tma)),
-    key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
-    prune_configs_by={"early_config_prune": prune_invalid_configs},
-)
+# @triton.autotune(
+#     configs=list(filter(keep_tma, configs_tma)),
+#     key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
+#     prune_configs_by={"early_config_prune": prune_invalid_configs},
+# )
 @triton.jit
 def _attn_fwd_tma(
     sm_scale,
@@ -2006,11 +2006,11 @@ class JVPAttn(Function):
                 STAGE=stage,  #
                 warp_specialize=warp_specialize,  #
                 ENABLE_JVP=ENABLE_JVP,  #
-                # # NOTE: The following are safe (unit-tested) default values
-                # BLOCK_M=MIN_SEQUENCE_LENGTH,  #
-                # BLOCK_N=MIN_SEQUENCE_LENGTH,  #
-                # num_stages=NUM_STAGES_OPTIONS[0],  #
-                # num_warps=4,  #
+                # NOTE: The following are safe (unit-tested) default values
+                BLOCK_M=MIN_SEQUENCE_LENGTH,  #
+                BLOCK_N=MIN_SEQUENCE_LENGTH,  #
+                num_stages=NUM_STAGES_OPTIONS[0],  #
+                num_warps=4,  #
                 **extra_kern_args,
             )
         else:
@@ -2048,11 +2048,11 @@ class JVPAttn(Function):
                 ENABLE_JVP=ENABLE_JVP,  #
                 ENABLE_DROPOUT=ENABLE_DROPOUT,
                 MASK_TYPE=MASK_TYPE,
-                # # NOTE: The following are safe (unit-tested) default values
-                # BLOCK_M=MIN_SEQUENCE_LENGTH,  #
-                # BLOCK_N=MIN_SEQUENCE_LENGTH,  #
-                # num_stages=NUM_STAGES_OPTIONS[0],  #
-                # num_warps=4,  #
+                # NOTE: The following are safe (unit-tested) default values
+                BLOCK_M=MIN_SEQUENCE_LENGTH,  #
+                BLOCK_N=MIN_SEQUENCE_LENGTH,  #
+                num_stages=NUM_STAGES_OPTIONS[0],  #
+                num_warps=4,  #
                 **extra_kern_args,
             )
 

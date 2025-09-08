@@ -214,7 +214,7 @@ class Args:
     seed: int = 42
     validate_gradients: bool = True
     test_masks: bool = True
-    mask_prob: float = 0.5  # Probability of masking out an attention weight
+    mask_prob: float = 0.9  # Probability of masking out an attention weight
 
     @staticmethod
     def get_parser() -> ArgumentParser:
@@ -244,7 +244,7 @@ class Args:
         )
         parser.add_argument(
             "--mask-prob",
-            default=0.5,
+            default=0.9,
             type=float,
             help="Probability of masking out attention weights",
         )
@@ -326,15 +326,19 @@ def create_attention_mask(
             torch.rand(args.bsz, heads, seq_len, seq_len, device=device, generator=gen)
             > args.mask_prob
         )
+        # mask[:, :, torch.arange(seq_len), :2] = True  # Ensure first two columns are True
+        # mask[:, :, :2, torch.arange(seq_len)] = True  # Ensure first two rows are True
         return mask
 
     elif mask_type == "additive":
         # Create an additive mask with values to be added to attention scores
-        # Use -inf for positions to ignore, 0 for positions to attend
+        # Use -inf (MASK_CONST) for positions to ignore, 0 for positions to attend
         rand_mask = torch.rand(args.bsz, heads, seq_len, seq_len, device=device, generator=gen)
         mask = torch.where(rand_mask > args.mask_prob, 0.0, MASK_CONST)
         # Convert to the target dtype
         mask = mask.to(dtype)
+        # mask[:, :, torch.arange(seq_len), :2] = 0.0  # Ensure first two columns are 0.0
+        # mask[:, :, :2, torch.arange(seq_len)] = 0.0  # Ensure first two rows are 0.0
         return mask
 
     else:
