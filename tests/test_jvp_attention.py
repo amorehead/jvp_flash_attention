@@ -633,14 +633,14 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
 
     tolerance_map = {
         "float16": 2e-3,
-        "float32": 7.5e-3,
+        "float32": 7.25e-3,
         "bfloat16": 3.2e-2,
     }
     tolerance = tolerance_map[args.dtype]
 
     # NOTE: Length-32 sequences pose specific numerical accuracy challenges, and for
     # them you may need to disable Triton kernel autotuning to avoid CUDA indexing errors.
-    grad_tolerance_map = {32: 2e-3}  # ...
+    grad_tolerance_map = {32: 7.2e-4}  # ...
     tangent_tolerance_map = {32: 1.6e-2}  # ...
 
     results = []
