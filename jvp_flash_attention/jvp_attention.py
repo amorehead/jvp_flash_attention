@@ -40,7 +40,7 @@ try:
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
-MASK_CONST = -1e6  # Use -1e6 instead of -inf for numerical stability e.g., in fp16/bf16
+MASK_CONST = -float("inf")  # Use a large negative value for masking
 MIN_SEQUENCE_LENGTH = 32  # NOTE: All sequence lengths must be multiples of 2 >= 32
 
 
@@ -114,7 +114,7 @@ def _attn_fwd_inner(
     V_block_ptr,  #
     T_K_block_ptr,
     T_V_block_ptr,  #
-    # Add mask and dropout parameters
+    # Mask and dropout parameters
     mask_block_ptr,
     dropout_p,
     philox_seed,
@@ -178,13 +178,16 @@ def _attn_fwd_inner(
     """
     # Range of values handled by this stage
     if STAGE == 1:
+        # NOTE: From 0 to the left of the diagonal
         lo, hi = 0, start_m * BLOCK_M
     elif STAGE == 2:
+        # NOTE: Used only for the block in which there is transition between non-masked and masked keys
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
         lo = tl.multiple_of(lo, BLOCK_M)
-    # causal = False
     else:
+        # NOTE: Only used for non-causal attention
         lo, hi = 0, N_CTX
+
     K_block_ptr = tl.advance(K_block_ptr, (0, lo))
     # NOTE: In fp8 mode, we may want to advance the V_block_ptr differently.
     # I did try advancing by (0, lo) instead for fp8, but I got an illegal memory access.
@@ -194,10 +197,20 @@ def _attn_fwd_inner(
         T_K_block_ptr = tl.advance(T_K_block_ptr, (0, lo))
         T_V_block_ptr = tl.advance(T_V_block_ptr, (lo, 0))
 
+    if MASK_TYPE > 0:
+        mask_block_ptr = tl.advance(mask_block_ptr, (0, lo))
+
     # Loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
+        # Let the compiler know that start_n is a multiple
+        # of BLOCK_N, so the compiler can do optimizations
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        # -- Compute qk ----
+
+        # Only load selected block of the mask if provided
+        if MASK_TYPE > 0:
+            mask = tl.load(mask_block_ptr)
+
+        # -- Compute qk --
         k = tl.load(K_block_ptr)
         qk = tl.dot(q, k)
         if ENABLE_JVP:
@@ -206,64 +219,33 @@ def _attn_fwd_inner(
 
         # Load and apply attention mask if provided (before scaling for STAGE != 2)
         if STAGE != 2 and MASK_TYPE > 0:
-            mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
             if MASK_TYPE == 1:  # Boolean mask
-                mask = tl.load(
-                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=False
-                )
                 # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
-                mask_value = tl.where(mask, 0.0, MASK_CONST)
-                qk = qk * qk_scale + mask_value
+                qk = qk + tl.where(mask, 0.0, MASK_CONST)
                 if ENABLE_JVP:
                     t_qk = tl.where(mask, t_qk, 0.0)
+
             elif MASK_TYPE == 2:  # Additive mask
-                mask = tl.load(
-                    mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=MASK_CONST
-                )
-                qk = qk * qk_scale + mask
+                qk = qk + mask
                 if ENABLE_JVP:
                     # 'add_mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
                     attend = mask != MASK_CONST
                     t_qk = tl.where(attend, t_qk, 0.0)
-            else:
-                qk = qk * qk_scale
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-        elif STAGE == 2:
-            # For causal attention (STAGE == 2)
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, MASK_CONST)
 
-            # Apply additional mask if provided
-            if MASK_TYPE > 0:
-                mask_offs = offs_m[:, None] * N_CTX + (start_n + offs_n[None, :])
-                if MASK_TYPE == 1:  # Boolean mask
-                    add_mask = tl.load(
-                        mask_block_ptr + mask_offs, mask=mask_offs < N_CTX * N_CTX, other=False
-                    )
-                    # Only apply additional masking where causal mask allows attention
-                    mask_value = tl.where(add_mask, 0.0, MASK_CONST)
-                    qk = tl.where(mask, qk + mask_value, qk)
-                    if ENABLE_JVP:
-                        # Tangents should be masked with 0.0 since they represent derivatives
-                        t_qk = tl.where(add_mask, t_qk, 0.0)
-                elif MASK_TYPE == 2:  # Additive mask
-                    add_mask = tl.load(
-                        mask_block_ptr + mask_offs,
-                        mask=mask_offs < N_CTX * N_CTX,
-                        other=MASK_CONST,
-                    )
-                    qk = tl.where(mask, qk + add_mask, qk)
-                    if ENABLE_JVP:
-                        attend = add_mask != MASK_CONST
-                        t_qk = tl.where(attend, t_qk, 0.0)
-                elif ENABLE_JVP:
-                    t_qk = tl.where(mask, t_qk, 0.0)
-            # TODO: Do we need a separate row maximum for qk_t?
+            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+            qk = qk * qk_scale - m_ij[:, None]
+
+        # For causal attention (STAGE == 2)
+        elif STAGE == 2:
+            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+            qk = qk * qk_scale + tl.where(mask, 0.0, MASK_CONST)
+
+            # TODO: Check, do we need a separate row maximum for t_qk?
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
+
+        # No masking case (STAGE != 2 and MASK_TYPE == 0)
         else:
-            # No masking case (STAGE != 2 and MASK_TYPE == 0)
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
 
@@ -278,9 +260,11 @@ def _attn_fwd_inner(
             p = p * dropout_mask.to(dtype) * dropout_scale
 
         l_ij = tl.sum(p, 1)
-        # -- Update m_i and l_i
+
+        # -- Update m_i and l_i --
         alpha = tl.math.exp2(m_i - m_ij)
         l_i = l_i * alpha + l_ij
+
         # -- Update output accumulator --
         if warp_specialize and (BLOCK_M == 128 and HEAD_DIM == 128):
             BM: tl.constexpr = acc.shape[0]
@@ -291,13 +275,15 @@ def _attn_fwd_inner(
             acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
         else:
             acc = acc * alpha[:, None]
-        # Update acc
+
         v = tl.load(V_block_ptr)
         # NOTE: We may need to transpose v if dtype == tl.float8e5
         # https://github.com/triton-lang/triton/commit/75d27b0b425329bad8c13b9cd47177d93590ec31
         p = p.to(dtype)
+
         if ENABLE_JVP:
             p_tqk = p * (t_qk * sm_scale)
+
             if warp_specialize and (BLOCK_M == 128 and HEAD_DIM == 128):
                 BM: tl.constexpr = g_acc.shape[0]
                 BN: tl.constexpr = g_acc.shape[1]
@@ -307,6 +293,7 @@ def _attn_fwd_inner(
                 g_acc = tl.join(g_acc0, g_acc1).permute(0, 2, 1).reshape([BM, BN])
             else:
                 g_acc = g_acc * alpha[:, None]
+
             g_acc = tl.dot(p_tqk.to(v.dtype), v, g_acc)
             mu_ij = tl.sum(p_tqk, 1)
             mu_i = mu_i * alpha + mu_ij
@@ -314,13 +301,21 @@ def _attn_fwd_inner(
             p_tv_acc = p_tv_acc * alpha[:, None] + tl.dot(p, t_v.to(dtype)).to(t_v.dtype)
             T_V_block_ptr = tl.advance(T_V_block_ptr, (BLOCK_N, 0))
             T_K_block_ptr = tl.advance(T_K_block_ptr, (0, BLOCK_N))
+
         acc = tl.dot(p, v.to(dtype), acc).to(acc.dtype)
-        # Update m_i and l_i
+
+        # -- Update m_i --
         m_i = m_ij
-        # The fp8 PR made a change to how K and V are advanced here but I believe we already have that.
+
+        # -- Move to the next block of K, V, and maybe the mask --
+        # NOTE: The fp8 PR made a change to how K and V are advanced here but I believe we already have that.
         # https://github.com/triton-lang/triton/commit/75d27b0b425329bad8c13b9cd47177d93590ec31
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+
+        if MASK_TYPE > 0:
+            mask_block_ptr = tl.advance(mask_block_ptr, (0, BLOCK_N))
+
     return acc, g_acc, l_i, m_i, mu_i, p_tv_acc
 
 
@@ -413,7 +408,7 @@ def _attn_fwd_inner_tma(
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, MASK_CONST)
+            qk = qk * qk_scale + tl.where(mask, 0.0, MASK_CONST)
             if ENABLE_JVP:
                 # Claude says "tangents should be masked with 0.0 since they represent derivatives".
                 t_qk = tl.where(mask, t_qk, 0.0)
@@ -701,8 +696,8 @@ def _attn_fwd(
         H: Number of h dimensions.
         N_CTX: Number of context dimensions.
         HEAD_DIM: Head dimension.
-        BLOCK_M: Block M dimension.
-        BLOCK_N: Block N dimension.
+        BLOCK_M: Block size for the queries.
+        BLOCK_N: Block size for the keys/values.
         FP8_OUTPUT: FP8 output flag.
         STAGE: Stage.
         warp_specialize: Warp specialization flag.
@@ -710,30 +705,28 @@ def _attn_fwd(
         ENABLE_DROPOUT: Enable dropout flag.
         MASK_TYPE: Mask type (0: no mask, 1: boolean, 2: additive).
     """
-    tl.static_assert(BLOCK_N <= HEAD_DIM)
+    tl.static_assert(BLOCK_N <= HEAD_DIM)  # N = KV
+
+    # Prepare metadata and indices
     dtype = tl.float8e5 if FP8_OUTPUT else tl.float32  # For dot products
-    start_m = tl.program_id(0)
-    off_hz = tl.program_id(1)
-    off_z = off_hz // H
-    off_h = off_hz % H
+    start_m = tl.program_id(0)  # Which block (in the input query sequence) to process
+    off_hz = tl.program_id(
+        1
+    )  # Which head and batch element to process, with a program being a single head of a single batch element
+    off_z = (
+        off_hz // H
+    )  # Which batch element this program is assigned to (n.b., each batch element has H heads)
+    off_h = off_hz % H  # The position of the head to process in the batch
+
+    # NOTE: This allows one to get the (N_CTX, HEAD_DIM) block in Q, K, V by indexing it by batch and head
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
 
-    # Prepare mask pointer if mask is provided
-    if MASK_TYPE > 0:
-        mask_offset = off_z * stride_mz + off_h * stride_mh
-        mask_block_ptr = Mask + mask_offset
-    else:
-        mask_block_ptr = None
-
-    # Generate philox offset for this block
-    philox_offset_base = off_hz * N_CTX * N_CTX
-
-    # Block pointers
+    # Initialize block pointers
     Q_block_ptr = tl.make_block_ptr(
         base=Q + qvk_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_qm, stride_qk),
-        offsets=(start_m * BLOCK_M, 0),
+        offsets=(start_m * BLOCK_M, 0),  # M = Q
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1, 0),
     )
@@ -749,7 +742,10 @@ def _attn_fwd(
     K_block_ptr = tl.make_block_ptr(
         base=K + qvk_offset,
         shape=(HEAD_DIM, N_CTX),
-        strides=(stride_kk, stride_kn),
+        strides=(
+            stride_kk,
+            stride_kn,
+        ),  # NOTE: We invert the strides of K to get its matrix transpose K^T
         offsets=(0, 0),
         block_shape=(HEAD_DIM, BLOCK_N),
         order=(0, 1),
@@ -762,13 +758,36 @@ def _attn_fwd(
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1, 0),
     )
-    # Initialize offsets
+
+    # Initialize block pointer for the mask, if provided
+    if MASK_TYPE > 0:
+        mask_offset = off_z.to(tl.int64) * stride_mz + off_h.to(tl.int64) * stride_mh
+        mask_block_ptr = tl.make_block_ptr(
+            base=Mask + mask_offset,
+            shape=(N_CTX, N_CTX),
+            strides=(stride_mm, stride_mn),
+            offsets=(start_m * BLOCK_M, 0),
+            block_shape=(BLOCK_M, BLOCK_N),
+            order=(1, 0),
+        )
+    else:
+        mask_block_ptr = None
+
+    # Initialize dropout offset for this block
+    philox_offset_base = off_hz * N_CTX * N_CTX
+
+    # Initialize offsets for the query tokens to process
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    # Initialize pointer to m and l
+
+    # Initialize accumulator pointers:
+    # m, the running maximum (one for each query)
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    # l, the running sum (one for each query as we sum the attention scores by rows)
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    # acc, the output accumulator (one vector for each query)
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
     if ENABLE_JVP:
         # NOTE: It's extremely likely we could just reuse qvk_offset, but this seems cheap so whatever
         t_qvk_offset = off_z.to(tl.int64) * stride_tqz + off_h.to(tl.int64) * stride_tqh
@@ -780,7 +799,7 @@ def _attn_fwd(
             block_shape=(BLOCK_M, HEAD_DIM),
             order=(1, 0),
         )
-        # Could probably just reuse v_order here
+        # NOTE: Could probably just reuse v_order here
         t_v_order: tl.constexpr = (0, 1) if T_V.dtype.element_ty == tl.float8e5 else (1, 0)
         T_V_block_ptr = tl.make_block_ptr(
             base=T_V + t_qvk_offset,
@@ -793,7 +812,10 @@ def _attn_fwd(
         T_K_block_ptr = tl.make_block_ptr(
             base=T_K + t_qvk_offset,
             shape=(HEAD_DIM, N_CTX),
-            strides=(stride_tkk, stride_tkn),
+            strides=(
+                stride_tkk,
+                stride_tkn,
+            ),  # NOTE: We invert the strides of tangent K (k_t) to get its matrix transpose K^T
             offsets=(0, 0),
             block_shape=(HEAD_DIM, BLOCK_N),
             order=(0, 1),
@@ -819,15 +841,18 @@ def _attn_fwd(
         g_acc = tl.zeros([1, 1], dtype=tl.float32)
         mu_i = tl.zeros([1], dtype=tl.float32)
         p_tv_acc = tl.zeros([1, 1], dtype=tl.float32)
-    # Load scales
+
+    # Prepare scales
     qk_scale = sm_scale
     qk_scale = qk_scale * 1.44269504  # 1/log(2)
+
     # Load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
-    # Stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
-    if STAGE & 1:
+
+    # Stage: 3 if causal, else 1
+    if STAGE == 1 or STAGE == 3:
+        # NOTE: This step runs for non-causal attention or for the
+        # blocks to the left of the diagonal for causal attention
         acc, g_acc, l_i, m_i, mu_i, p_tv_acc = _attn_fwd_inner(
             acc,
             g_acc,
@@ -861,8 +886,10 @@ def _attn_fwd(
             ENABLE_DROPOUT,
             MASK_TYPE,
         )
-    # Stage 2: on-band
-    if STAGE & 2:
+
+    if STAGE == 3:
+        # NOTE: This step runs for the blocks to the
+        # right of the diagonal for causal attention
         acc, g_acc, l_i, m_i, mu_i, p_tv_acc = _attn_fwd_inner(
             acc,
             g_acc,  #
@@ -896,12 +923,14 @@ def _attn_fwd(
             ENABLE_DROPOUT,
             MASK_TYPE,
         )
+
     # Epilogue
-    m_i += tl.math.log2(l_i)
+    m_i += tl.math.log2(l_i)  # NOTE: This is needed to compute the logsumexp for the backward pass
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+
     if ENABLE_JVP:
         t_p_v = g_acc / l_i[:, None] - (mu_i / l_i)[:, None] * acc
         t_y_out = t_p_v + p_tv_acc / l_i[:, None]
@@ -1001,26 +1030,33 @@ def _attn_fwd_tma(
         desc_o_t: Descriptor for the transposed output tensor.
         N_CTX: Context length.
         HEAD_DIM: Dimension of each head.
-        BLOCK_M: Block size for M dimension.
-        BLOCK_N: Block size for N dimension.
+        BLOCK_M: Block size for the queries.
+        BLOCK_N: Block size for the keys/values.
         FP8_OUTPUT: Flag indicating if FP8 output is used.
         STAGE: Stage of the computation.
         warp_specialize: Flag indicating if warp specialization is used.
         ENABLE_JVP: Flag indicating if JVP (Jacobian-vector product) is enabled.
     """
-    dtype = tl.float8e5 if FP8_OUTPUT else tl.float32  # For dot products
-    tl.static_assert(BLOCK_N <= HEAD_DIM)
-    start_m = tl.program_id(0)
-    off_hz = tl.program_id(1)
-    off_z = off_hz // H
-    off_h = off_hz % H
+    tl.static_assert(BLOCK_N <= HEAD_DIM)  # N = KV
 
+    # Prepare metadata and indices
+    dtype = tl.float8e5 if FP8_OUTPUT else tl.float32  # For dot products
+    start_m = tl.program_id(0)  # Which block (in the input query sequence) to process
+    off_hz = tl.program_id(
+        1
+    )  # Which head and batch element to process, with a program being a single head of a single batch element
+    off_z = (
+        off_hz // H
+    )  # Which batch element this program is assigned to (n.b., each batch element has H heads)
+    off_h = off_hz % H  # The position of the head to process in the batch
+
+    # Initialize tensor descriptors
     y_dim = Z * H * N_CTX
     desc_q = _maybe_make_tensor_desc(
         desc_q,
         shape=[y_dim, HEAD_DIM],
         strides=[HEAD_DIM, 1],
-        block_shape=[BLOCK_M, HEAD_DIM],
+        block_shape=[BLOCK_M, HEAD_DIM],  # M = Q
     )
     if FP8_OUTPUT:
         v_shape = [HEAD_DIM, y_dim]
@@ -1048,13 +1084,19 @@ def _attn_fwd_tma(
 
     offset_y = off_z * (N_CTX * H) + off_h * N_CTX
     qo_offset_y = offset_y + start_m * BLOCK_M
-    # Initialize offsets
+
+    # Initialize offsets for the query tokens to process
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    # Initialize pointer to m and l
+
+    # Initialize accumulator pointers:
+    # m, the running maximum (one for each query)
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    # l, the running sum (one for each query as we sum the attention scores by rows)
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    # acc, the output accumulator (one vector for each query)
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+
     if ENABLE_JVP:
         desc_q_t = _maybe_make_tensor_desc(
             desc_q_t,
@@ -1098,15 +1140,18 @@ def _attn_fwd_tma(
         g_acc = tl.zeros([1, 1], dtype=tl.float32)
         mu_i = tl.zeros([1], dtype=tl.float32)
         p_tv_acc = tl.zeros([1, 1], dtype=tl.float32)
-    # Load scales
+
+    # Prepare scales
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
+
     # Load q: it will stay in SRAM throughout
     q = desc_q.load([qo_offset_y, 0])
-    # Stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
-    if STAGE & 1:
+
+    # Stage: 3 if causal, else 1
+    if STAGE == 1 or STAGE == 3:
+        # NOTE: This step runs for non-causal attention or for the
+        # blocks to the left of the diagonal for causal attention
         acc, g_acc, l_i, m_i, mu_i, p_tv_acc = _attn_fwd_inner_tma(
             acc,
             g_acc,  #
@@ -1135,8 +1180,10 @@ def _attn_fwd_tma(
             warp_specialize,
             ENABLE_JVP,
         )
-    # Stage 2: on-band
-    if STAGE & 2:
+
+    if STAGE == 3:
+        # NOTE: This step runs for the blocks to the
+        # right of the diagonal for causal attention
         acc, g_acc, l_i, m_i, mu_i, p_tv_acc = _attn_fwd_inner_tma(
             acc,
             g_acc,  #
@@ -1165,12 +1212,14 @@ def _attn_fwd_tma(
             warp_specialize,
             ENABLE_JVP,
         )
+
     # Epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
     desc_o.store([qo_offset_y, 0], acc.to(dtype))
+
     if ENABLE_JVP:
         t_p_v = g_acc / l_i[:, None] - (mu_i / l_i)[:, None] * acc
         t_y_out = t_p_v + p_tv_acc / l_i[:, None]
@@ -1179,8 +1228,8 @@ def _attn_fwd_tma(
 
 @triton.jit
 def _attn_bwd_preprocess(
-    O, DO, Delta, Z, H, N_CTX, BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr
-):  # noqa: E741
+    O, DO, Delta, Z, H, N_CTX, BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr  # noqa: E741
+):
     """Preprocess the inputs for the backward attention pass.
 
     Args:
@@ -1495,7 +1544,6 @@ def _attn_bwd(
     MASK_TYPE: tl.constexpr,
     dropout_p,
     philox_seed,
-    philox_offset_base,
     ENABLE_DROPOUT: tl.constexpr,
 ):
     """The main backward pass for the attention mechanism.
@@ -1528,15 +1576,15 @@ def _attn_bwd(
                         2: additive mask).
         dropout_p: Dropout probability.
         philox_seed: Seed for Philox RNG.
-        philox_offset_base: Base offset for Philox RNG.
         ENABLE_DROPOUT: Flag to enable dropout.
     """
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
+    pid = tl.program_id(0)
+    off_hz = tl.program_id(1)
     bhid = tl.program_id(2)
     off_chz = (bhid * N_CTX).to(tl.int64)
     adj = (stride_h * (bhid % H) + stride_z * (bhid // H)).to(tl.int64)
-    pid = tl.program_id(0)
 
     # Offset pointers for batch/head
     Q += adj
@@ -1548,6 +1596,9 @@ def _attn_bwd(
     DV += adj
     M += off_chz
     D += off_chz
+
+    # Generate philox offset for this block
+    philox_offset_base = off_hz * N_CTX * N_CTX
 
     # Load scales
     offs_k = tl.arange(0, HEAD_DIM)
@@ -1733,7 +1784,6 @@ class JVPAttn(Function):
         MASK_TYPE: int
         dropout_p: float
         philox_seed: int
-        philox_offset: int
         ENABLE_DROPOUT: bool
 
     class FwdOutCtxContrib(NamedTuple):
@@ -1748,7 +1798,6 @@ class JVPAttn(Function):
         MASK_TYPE: int
         dropout_p: float
         philox_seed: int
-        philox_offset: int
         ENABLE_DROPOUT: bool
 
     class FwdOut(NamedTuple):
@@ -1821,6 +1870,9 @@ class JVPAttn(Function):
         Returns:
             Outputs of JVP Attention.
         """
+        if dropout_p != 0.0:
+            raise NotImplementedError("Dropout is not currently supported in JVP attention.")
+
         # Shape constraints
         Z, H, N_CTX, HEAD_DIM_Q = q.shape
         HEAD_DIM_K = k.shape[-1]
@@ -2056,8 +2108,6 @@ class JVPAttn(Function):
                 **extra_kern_args,
             )
 
-        # TODO: Decide whether `0` is the right philox_offset here
-        philox_offset = 0
         return JVPAttn.FwdOut(
             o,
             JVPAttn.FwdOutCtxContrib(
@@ -2070,7 +2120,6 @@ class JVPAttn(Function):
                 MASK_TYPE,
                 dropout_p,
                 philox_seed,
-                philox_offset,
                 ENABLE_DROPOUT,
             ),
         )
@@ -2108,7 +2157,6 @@ class JVPAttn(Function):
             MASK_TYPE,
             dropout_p,
             philox_seed,
-            philox_offset,
             ENABLE_DROPOUT,
         ) = outputs
         ctx.grid = grid
@@ -2121,7 +2169,6 @@ class JVPAttn(Function):
         ctx.MASK_TYPE = MASK_TYPE
         ctx.dropout_p = dropout_p
         ctx.philox_seed = philox_seed
-        ctx.philox_offset = philox_offset
         ctx.ENABLE_DROPOUT = ENABLE_DROPOUT
 
     @staticmethod
@@ -2333,7 +2380,6 @@ class JVPAttn(Function):
             MASK_TYPE=ctx.MASK_TYPE,
             dropout_p=ctx.dropout_p,
             philox_seed=ctx.philox_seed,
-            philox_offset_base=ctx.philox_offset,  # Same as forward
             ENABLE_DROPOUT=ctx.ENABLE_DROPOUT,
             num_warps=NUM_WARPS,  #
             num_stages=NUM_STAGES,  #
