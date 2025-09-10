@@ -33,6 +33,10 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.autograd.function import FunctionCtx
 
+# NOTE: Uncomment to turn RuntimeWarnings into errors for debugging
+# import warnings
+# warnings.filterwarnings("error", category=RuntimeWarning)
+
 try:
     from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -239,8 +243,6 @@ def _attn_fwd_inner(
         elif STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * qk_scale + tl.where(mask, 0.0, MASK_CONST)
-
-            # TODO: Check, do we need a separate row maximum for t_qk?
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
 
@@ -1581,7 +1583,6 @@ def _attn_bwd(
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     pid = tl.program_id(0)
-    off_hz = tl.program_id(1)
     bhid = tl.program_id(2)
     off_chz = (bhid * N_CTX).to(tl.int64)
     adj = (stride_h * (bhid % H) + stride_z * (bhid // H)).to(tl.int64)
@@ -1598,7 +1599,7 @@ def _attn_bwd(
     D += off_chz
 
     # Generate philox offset for this block
-    philox_offset_base = off_hz * N_CTX * N_CTX
+    philox_offset_base = bhid * N_CTX * N_CTX
 
     # Load scales
     offs_k = tl.arange(0, HEAD_DIM)
