@@ -212,8 +212,9 @@ class Args:
     benchmark_iters: int = 100
     dtype: str = "float16"
     seed: int = 42
-    validate_gradients: bool = True
     test_masks: bool = True
+    validate_gradients: bool = True
+    benchmark_performance: bool = True
     mask_prob: float = 0.9  # Probability of masking out an attention weight
 
     @staticmethod
@@ -233,14 +234,19 @@ class Args:
         )
         parser.add_argument("--seed", default=42, type=int)
         parser.add_argument(
+            "--no-test-masks",
+            action="store_true",
+            help="Skip testing with attention masks",
+        )
+        parser.add_argument(
             "--no-validate-gradients",
             action="store_true",
             help="Skip gradient validation",
         )
         parser.add_argument(
-            "--no-test-masks",
+            "--no-benchmark-performance",
             action="store_true",
-            help="Skip testing with attention masks",
+            help="Skip performance benchmarking",
         )
         parser.add_argument(
             "--mask-prob",
@@ -254,10 +260,15 @@ class Args:
     def from_namespace(namespace: Namespace) -> Args:
         """Create Args from a namespace."""
         kwargs = vars(namespace)
-        validate_gradients = not kwargs.pop("no_validate_gradients", False)
+
         test_masks = not kwargs.pop("no_test_masks", False)
-        kwargs["validate_gradients"] = validate_gradients
+        validate_gradients = not kwargs.pop("no_validate_gradients", False)
+        benchmark_performance = not kwargs.pop("no_benchmark_performance", False)
+
         kwargs["test_masks"] = test_masks
+        kwargs["validate_gradients"] = validate_gradients
+        kwargs["benchmark_performance"] = benchmark_performance
+
         return Args(**kwargs)
 
 
@@ -326,8 +337,12 @@ def create_attention_mask(
             torch.rand(args.bsz, heads, seq_len, seq_len, device=device, generator=gen)
             > args.mask_prob
         )
-        # mask[:, :, torch.arange(seq_len), :2] = True  # Ensure first two columns are True
-        # mask[:, :, :2, torch.arange(seq_len)] = True  # Ensure first two rows are True
+        # mask[0, :-1, :, :2] = (
+        #     True  # Ensure first two columns of the first batch element (except for its last head) are True
+        # )
+        # mask[1, :-1, :, -2:] = (
+        #     True  # Ensure last two columns of the second batch element (except for its last head) are True
+        # )
         return mask
 
     elif mask_type == "additive":
@@ -337,8 +352,12 @@ def create_attention_mask(
         mask = torch.where(rand_mask > args.mask_prob, 0.0, MASK_CONST)
         # Convert to the target dtype
         mask = mask.to(dtype)
-        # mask[:, :, torch.arange(seq_len), :2] = 0.0  # Ensure first two columns are 0.0
-        # mask[:, :, :2, torch.arange(seq_len)] = 0.0  # Ensure first two rows are 0.0
+        # mask[0, :-1, :, :2] = (
+        #     0.0  # Ensure first two columns of the first batch element (except for its last head) are zeros
+        # )
+        # mask[1, :-1, :, -2:] = (
+        #     0.0  # Ensure last two columns of the second batch element (except for its last head) are zeros
+        # )
         return mask
 
     else:
@@ -739,6 +758,36 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
                         )
                         out = JVPAttn.fwd_dual(q, k, v, attn_mask=attn_mask, causal=is_causal)
 
+                    if not args.benchmark_performance:
+                        print("  Skipping performance benchmarking.")
+                        results.append(
+                            BenchmarkResult(
+                                seq_len=seq_len,
+                                is_causal=is_causal,
+                                method="sdpa",
+                                time_ms=np.nan,
+                                memory_allocated_mb=np.nan,
+                                memory_reserved_mb=np.nan,
+                                mask_type=mask_type,
+                                flops=np.nan,
+                                accuracy=None,
+                            )
+                        )
+                        results.append(
+                            BenchmarkResult(
+                                seq_len=seq_len,
+                                is_causal=is_causal,
+                                method="jvp_attn",
+                                time_ms=np.nan,
+                                memory_allocated_mb=np.nan,
+                                memory_reserved_mb=np.nan,
+                                mask_type=mask_type,
+                                flops=np.nan,
+                                accuracy=accuracy_metrics,
+                            )
+                        )
+                        continue
+
                     print("\nBenchmarking performance...")
                     heads = args.model_dim // args.head_dim
 
@@ -911,8 +960,9 @@ def main(args: Args) -> None:
         f"Configuration: bsz={args.bsz}, model_dim={args.model_dim}, "
         f"head_dim={args.head_dim}, dtype={args.dtype}"
     )
-    print(f"Gradient validation: {'Enabled' if args.validate_gradients else 'Disabled'}")
     print(f"Mask testing: {'Enabled' if args.test_masks else 'Disabled'}")
+    print(f"Gradient validation: {'Enabled' if args.validate_gradients else 'Disabled'}")
+    print(f"Performance benchmarking: {'Enabled' if args.benchmark_performance else 'Disabled'}")
     if args.test_masks:
         print(f"Mask probability: {args.mask_prob}")
 
@@ -1014,6 +1064,8 @@ def main(args: Args) -> None:
             "dtype": args.dtype,
             "seed": args.seed,
             "test_masks": args.test_masks,
+            "validate_gradients": args.validate_gradients,
+            "benchmark_performance": args.benchmark_performance,
             "mask_prob": args.mask_prob if args.test_masks else None,
         },
         "results": results_data,
