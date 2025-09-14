@@ -2303,7 +2303,7 @@ class JVPAttn(Function):
         elif attn_mask.dtype == torch.bool:
             MASK_TYPE = 1
             mask_tensor = attn_mask.contiguous()
-            mask_strides = strides_zhnd(attn_mask)
+            mask_strides = strides_zhnd(mask_tensor)
             if verify_attn_mask:
                 # Check if any head is all False
                 assert mask_tensor.any(
@@ -2312,7 +2312,7 @@ class JVPAttn(Function):
         else:
             MASK_TYPE = 2
             mask_tensor = attn_mask.to(q.dtype).contiguous()
-            mask_strides = strides_zhnd(attn_mask)
+            mask_strides = strides_zhnd(mask_tensor)
             if verify_attn_mask:
                 # Check if the mask contains -inf/inf/NaN or is all MASK_CONST for any head
                 assert not torch.isinf(
