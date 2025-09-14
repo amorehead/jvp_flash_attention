@@ -945,12 +945,18 @@ def _attn_fwd(
         )
 
     # Epilogue
-    if l_i.sum() == 0.0:
-        l_i += 1.0  # NOTE: This happens if the entire block is masked out.
-    else:
-        m_i += tl.math.log2(
-            l_i
-        )  # NOTE: This is needed to compute the logsumexp for the backward pass.
+    empty_mask = l_i == 0.0
+    if empty_mask.sum() > 0:
+        l_i = tl.where(
+            empty_mask, 1.0, l_i
+        )  # NOTE: This happens if the entire block is masked out.
+
+    m_i = m_i + tl.where(
+        # NOTE: This is needed to compute the logsumexp for the backward pass.
+        empty_mask,
+        0.0,
+        tl.math.log2(l_i),
+    )
 
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
