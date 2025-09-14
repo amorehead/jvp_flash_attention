@@ -46,7 +46,7 @@ except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
 MASK_CONST = (
-    -1.0e4
+    -1.0e2
 )  # Use a large negative value for masking (compatible with float16, bfloat16, and float32)
 MIN_SEQUENCE_LENGTH = 32  # NOTE: All sequence lengths must be multiples of 2 >= 32
 
