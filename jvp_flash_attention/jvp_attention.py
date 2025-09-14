@@ -244,10 +244,6 @@ def _attn_fwd_inner(
 
             elif MASK_TYPE == 2:  # Additive mask
                 qk = qk + mask
-                if ENABLE_JVP:
-                    # 'mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
-                    attend = mask != MASK_CONST
-                    t_qk = tl.where(attend, t_qk, 0.0)
 
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
@@ -266,10 +262,9 @@ def _attn_fwd_inner(
 
         p = tl.math.exp2(qk)
 
-        if MASK_TYPE > 0 or STAGE == 2:
+        if MASK_TYPE == 1 or STAGE == 2:
             # Account for fully masked sequence blocks
-            full_mask = mask != MASK_CONST if MASK_TYPE == 2 else mask == 1
-            p = tl.where(full_mask, p, 0.0)
+            p = tl.where(mask == 1, p, 0.0)
 
         # Apply dropout if enabled
         if ENABLE_DROPOUT:
