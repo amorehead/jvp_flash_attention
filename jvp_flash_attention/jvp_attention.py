@@ -226,10 +226,6 @@ def _attn_fwd_inner(
         # of BLOCK_N, so the compiler can do optimizations
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        # Only load selected block of the mask if provided
-        if MASK_TYPE > 0:
-            mask = tl.load(mask_block_ptr)
-
         # -- Compute qk --
         k = tl.load(K_block_ptr)
         qk = tl.dot(q, k)
@@ -239,6 +235,7 @@ def _attn_fwd_inner(
 
         # Load and apply attention mask if provided (before scaling for STAGE != 2)
         if MASK_TYPE > 0:
+            mask = tl.load(mask_block_ptr)
             if MASK_TYPE == 1:  # Boolean mask
                 # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
                 qk = qk + tl.where(mask == 1, 0.0, MASK_CONST)
@@ -268,6 +265,11 @@ def _attn_fwd_inner(
             qk = qk * qk_scale - m_ij[:, None]
 
         p = tl.math.exp2(qk)
+
+        if MASK_TYPE > 0 or STAGE == 2:
+            # Account for fully masked sequence blocks
+            full_mask = mask != MASK_CONST if MASK_TYPE == 2 else mask == 1
+            p = tl.where(full_mask, p, 0.0)
 
         # Apply dropout if enabled
         if ENABLE_DROPOUT:
@@ -943,7 +945,13 @@ def _attn_fwd(
         )
 
     # Epilogue
-    m_i += tl.math.log2(l_i)  # NOTE: This is needed to compute the logsumexp for the backward pass
+    if l_i.sum() == 0.0:
+        l_i += 1.0  # NOTE: This happens if the entire block is masked out.
+    else:
+        m_i += tl.math.log2(
+            l_i
+        )  # NOTE: This is needed to compute the logsumexp for the backward pass.
+
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
