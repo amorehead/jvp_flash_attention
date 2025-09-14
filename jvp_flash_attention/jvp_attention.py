@@ -45,7 +45,9 @@ try:
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
-MASK_CONST = -1.0e6  # Use a large negative value for masking
+MASK_CONST = (
+    -1.0e4
+)  # Use a large negative value for masking (compatible with float16, bfloat16, and float32)
 MIN_SEQUENCE_LENGTH = 32  # NOTE: All sequence lengths must be multiples of 2 >= 32
 
 
@@ -2194,7 +2196,7 @@ class JVPAttn(Function):
         sm_scale: float | None = None,
         warp_specialize: bool = True,
         USE_TMA: bool = True,
-        verify_attn_mask: bool = False,
+        verify_attn_mask: bool = True,
     ) -> JVPAttn.FwdOut:
         """Forward pass for JVP Attention.
 
@@ -2314,7 +2316,7 @@ class JVPAttn(Function):
             mask_tensor = attn_mask.to(q.dtype).contiguous()
             mask_strides = strides_zhnd(mask_tensor)
             if verify_attn_mask:
-                # Check if the mask contains -inf/inf/NaN or is all MASK_CONST for any head
+                # Check if the mask contains -inf/inf/NaN or is all (or no) MASK_CONST for any head
                 assert not torch.isinf(
                     mask_tensor
                 ).any(), "The attention mask cannot contain -inf or inf."
@@ -2324,6 +2326,11 @@ class JVPAttn(Function):
                 assert (
                     (mask_tensor != MASK_CONST).any(dim=(-1, -2)).all()
                 ), f"The attention mask cannot be all {MASK_CONST} (the masking constant) for any head."
+
+                if not (mask_tensor == MASK_CONST).any():
+                    raise UserWarning(
+                        f"The provided floating-point attention mask does not mask out any elements with {MASK_CONST} (the masking constant). Consider using this constant for correct masking behavior."
+                    )
 
         # Prepare dropout arguments
         ENABLE_DROPOUT = dropout_p > 0.0
