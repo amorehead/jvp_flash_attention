@@ -343,6 +343,22 @@ def create_attention_mask(
         # mask[1, :-1, :, -2:] = (
         #     True  # Ensure last two columns of the second batch element (except for its last head) are True
         # )
+
+        # Find completely masked heads
+        fully_masked = ~mask.view(args.bsz, heads, -1).any(dim=2)
+
+        # For each fully masked head, unmask some random positions
+        if fully_masked.any():
+            print("  ⚠️  Some heads were fully masked; unmasking some positions to avoid this.")
+            for b in range(args.bsz):
+                for h in range(heads):
+                    if fully_masked[b, h]:
+                        num_to_unmask = max(1, seq_len * seq_len // 10)
+                        indices = torch.randperm(seq_len * seq_len, device=device, generator=gen)[
+                            :num_to_unmask
+                        ]
+                        mask[b, h].view(-1)[indices] = True
+
         return mask
 
     elif mask_type == "additive":
@@ -358,6 +374,22 @@ def create_attention_mask(
         # mask[1, :-1, :, -2:] = (
         #     0.0  # Ensure last two columns of the second batch element (except for its last head) are zeros
         # )
+
+        # Find completely masked heads
+        fully_masked = (mask.view(args.bsz, heads, -1) == MASK_CONST).all(dim=2)
+
+        # For each fully masked head, unmask some random positions
+        if fully_masked.any():
+            print("  ⚠️  Some heads were fully masked; unmasking some positions to avoid this.")
+            for b in range(args.bsz):
+                for h in range(heads):
+                    if fully_masked[b, h]:
+                        num_to_unmask = max(1, seq_len * seq_len // 10)
+                        indices = torch.randperm(seq_len * seq_len, device=device, generator=gen)[
+                            :num_to_unmask
+                        ]
+                        mask[b, h].view(-1)[indices] = 0.0
+
         return mask
 
     else:
