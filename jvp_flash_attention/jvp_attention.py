@@ -33,8 +33,9 @@ from torch import Tensor
 from torch.autograd import Function
 from torch.autograd.function import FunctionCtx
 
-# NOTE: Uncomment to turn RuntimeWarnings into errors for debugging
+# NOTE: Uncomment to turn warnings into errors for debugging
 # import warnings
+# warnings.filterwarnings("error", category=UserWarning)
 # warnings.filterwarnings("error", category=RuntimeWarning)
 
 try:
@@ -44,33 +45,48 @@ try:
 except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
-MASK_CONST = -float("inf")  # Use a large negative value for masking
+MASK_CONST = -1.0e6  # Use a large negative value for masking
 MIN_SEQUENCE_LENGTH = 32  # NOTE: All sequence lengths must be multiples of 2 >= 32
 
 
 def is_hip():
     """Check if the current device is HIP."""
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+    try:
+        return triton.runtime.driver.active.get_current_target().backend == "hip"
+    except Exception:
+        return False
 
 
 def is_cuda():
     """Check if the current device is CUDA."""
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+    try:
+        return triton.runtime.driver.active.get_current_target().backend == "cuda"
+    except Exception:
+        return False
 
 
 def supports_host_descriptor():
     """Check if the current device supports host tensor descriptors."""
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    try:
+        return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    except Exception:
+        return False
 
 
 def supports_tma():
     """Check if the current device supports Tensor Memory Access (TMA)."""
-    return HAS_TENSOR_DESC and is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    try:
+        return HAS_TENSOR_DESC and is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    except Exception:
+        return False
 
 
 def is_blackwell():
     """Check if the current device is Blackwell architecture."""
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+    try:
+        return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+    except Exception:
+        return False
 
 
 @triton.jit
@@ -222,17 +238,17 @@ def _attn_fwd_inner(
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
 
         # Load and apply attention mask if provided (before scaling for STAGE != 2)
-        if STAGE != 2 and MASK_TYPE > 0:
+        if MASK_TYPE > 0:
             if MASK_TYPE == 1:  # Boolean mask
                 # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
-                qk = qk + tl.where(mask, 0.0, MASK_CONST)
+                qk = qk + tl.where(mask == 1, 0.0, MASK_CONST)
                 if ENABLE_JVP:
-                    t_qk = tl.where(mask, t_qk, 0.0)
+                    t_qk = tl.where(mask == 1, t_qk, 0.0)
 
             elif MASK_TYPE == 2:  # Additive mask
                 qk = qk + mask
                 if ENABLE_JVP:
-                    # 'add_mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
+                    # 'mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
                     attend = mask != MASK_CONST
                     t_qk = tl.where(attend, t_qk, 0.0)
 
@@ -246,7 +262,7 @@ def _attn_fwd_inner(
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
 
-        # No masking case (STAGE != 2 and MASK_TYPE == 0)
+        # No masking case (MASK_TYPE == 0 and STAGE != 2)
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
@@ -830,7 +846,7 @@ def _attn_fwd(
             block_shape=(BLOCK_M, HEAD_DIM),
             order=(1, 0),
         )
-        # Load q_t: it will stay in SRAM throughout
+        # Load q_t: It will stay in SRAM throughout.
         t_q = tl.load(T_Q_block_ptr)
         g_acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
         mu_i = tl.zeros([BLOCK_M], dtype=tl.float32)
@@ -848,7 +864,7 @@ def _attn_fwd(
     qk_scale = sm_scale
     qk_scale = qk_scale * 1.44269504  # 1/log(2)
 
-    # Load q: it will stay in SRAM throughout
+    # Load q: It will stay in SRAM throughout.
     q = tl.load(Q_block_ptr)
 
     # Stage: 3 if causal, else 1
@@ -933,6 +949,7 @@ def _attn_fwd(
     tl.store(m_ptrs, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
+    # If JVP is enabled, compute and store the output tangent
     if ENABLE_JVP:
         t_p_v = g_acc / l_i[:, None] - (mu_i / l_i)[:, None] * acc
         t_y_out = t_p_v + p_tv_acc / l_i[:, None]
@@ -1129,7 +1146,7 @@ def _attn_fwd_tma(
             strides=[HEAD_DIM, 1],
             block_shape=[BLOCK_M, HEAD_DIM],
         )
-        # Load t_q: it will stay in SRAM throughout
+        # Load t_q: It will stay in SRAM throughout.
         t_q = desc_q_t.load([qo_offset_y, 0])
         g_acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
         mu_i = tl.zeros([BLOCK_M], dtype=tl.float32)
@@ -1147,7 +1164,7 @@ def _attn_fwd_tma(
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
 
-    # Load q: it will stay in SRAM throughout
+    # Load q: It will stay in SRAM throughout.
     q = desc_q.load([qo_offset_y, 0])
 
     # Stage: 3 if causal, else 1
@@ -1230,30 +1247,31 @@ def _attn_fwd_tma(
 
 @triton.jit
 def _attn_bwd_preprocess(
-    O, DO, Delta, Z, H, N_CTX, BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr  # noqa: E741
+    O, DO, Delta, N_CTX, BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr  # noqa: E741
 ):
-    """Preprocess the inputs for the backward attention pass.
+    """Preprocess output deltas for the backward attention pass.
 
     Args:
         O: Output tensor.
         DO: Gradient of the output tensor.
         Delta: Accumulated gradients.
-        Z: Input tensor.
-        H: Head dimension.
         N_CTX: Context length.
         BLOCK_M: Block size for M dimension.
         HEAD_DIM: Head dimension size.
     """
+    # Collect sequence, batch, and head indices
     off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     off_hz = tl.program_id(1)
     off_n = tl.arange(0, HEAD_DIM)
-    # Load
+
+    # Load outputs and gradients
     o = tl.load(O + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :])
     do = tl.load(DO + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :]).to(
         tl.float32
     )
     delta = tl.sum(o * do, axis=1)
-    # Write-back
+
+    # Write-back the intermediate delta results
     tl.store(Delta + off_hz * N_CTX + off_m, delta)
 
 
@@ -1279,9 +1297,11 @@ def _attn_bwd_dkdv(
     start_n,
     start_m,
     num_steps,  #
-    MASK: tl.constexpr,
+    CAUSAL_MASKING: tl.constexpr,
     # Args for masking/dropout
     mask_ptr,
+    mask_stride_tok1,
+    mask_stride_tok2,
     MASK_TYPE: tl.constexpr,
     dropout_p,
     philox_seed,
@@ -1309,8 +1329,10 @@ def _attn_bwd_dkdv(
         start_n: Starting index for N dimension.
         start_m: Starting index for M dimension.
         num_steps: Number of steps to unroll.
-        MASK: Masking tensor.
+        CAUSAL_MASKING: Flag for causal masking.
         mask_ptr: Pointer to the mask tensor.
+        mask_stride_tok1: Stride for the third (row) dimension of the mask tensor.
+        mask_stride_tok2: Stride for the fourth (column) dimension of the mask tensor.
         MASK_TYPE: Type of masking (0: no mask, 1: boolean mask,
                      2: additive mask).
         dropout_p: Dropout probability.
@@ -1323,70 +1345,85 @@ def _attn_bwd_dkdv(
         dk: Gradient of the key tensor.
         dv: Gradient of the value tensor.
     """
+    # Initialize pointers for Q and DO
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
-    offs_k = tl.arange(0, HEAD_DIM)
-    qT_ptrs = Q + offs_m[None, :] * stride_tok + offs_k[:, None] * stride_d
-    do_ptrs = DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
+    offs_h = tl.arange(0, HEAD_DIM)
+    qT_ptrs = Q + offs_m[None, :] * stride_tok + offs_h[:, None] * stride_d
+    do_ptrs = DO + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d
+
+    if MASK_TYPE > 0:
+        mask_ptr = (
+            mask_ptr + offs_m[None, :] * mask_stride_tok1 + offs_n[:, None] * mask_stride_tok2
+        )
+
     # NOTE: BLOCK_N1 must be a multiple of BLOCK_M1, otherwise the code wouldn't work.
     tl.static_assert(BLOCK_N1 % BLOCK_M1 == 0)
     curr_m = start_m
     step_m = BLOCK_M1
     dtype = tl.float32  # For dot products
-    for blk_idx in range(num_steps):
+
+    # Iteratively compute dK and dV over the M dimension
+    for _ in range(num_steps):
         qT = tl.load(qT_ptrs)
-        # Load m before computing qk to reduce pipeline stall.
+
+        # Load m before computing qk to reduce pipeline stall
         offs_m = curr_m + tl.arange(0, BLOCK_M1)
         m = tl.load(M + offs_m)
         qkT = tl.dot(k, qT)
-        # Causal masking before exponentiation.
-        if MASK:
-            causal_mask = offs_m[None, :] >= offs_n[:, None]
-            qkT = tl.where(causal_mask, qkT, MASK_CONST)
-        # External masking before exponentiation.
-        if MASK_TYPE > 0:
-            mask_offs = offs_m[None, :] * N_CTX + offs_n[:, None]
-            mask = tl.load(mask_ptr + mask_offs)
-            if MASK_TYPE == 1:
-                qkT = tl.where(mask, qkT, MASK_CONST)
-            elif MASK_TYPE == 2:
-                qkT += mask
-        # Exponentiation.
+
+        # Exponentiation
         pT = tl.math.exp2(qkT - m[None, :])
-        # Dropout after exponentiation.
+
+        # External masking after exponentiation
+        if MASK_TYPE > 0:
+            mask = tl.load(mask_ptr)
+            if MASK_TYPE == 1:  # Boolean mask
+                pT = tl.where(mask == 1, pT, 0.0)
+            elif MASK_TYPE == 2:  # Additive mask
+                # 'mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
+                attend = mask != MASK_CONST
+                pT = tl.where(attend, pT, 0.0)
+
+        # (or) Causal masking after exponentiation
+        elif CAUSAL_MASKING:
+            causal_mask = offs_m[None, :] >= offs_n[:, None]
+            pT = tl.where(causal_mask, pT, 0.0)
+
+        # Dropout after exponentiation
         if ENABLE_DROPOUT:
             philox_offset = philox_offset_base + curr_m * N_CTX + start_n
             dropout_mask, dropout_scale = create_dropout_mask(
                 philox_seed, philox_offset, dropout_p, BLOCK_M1, BLOCK_N1, N_CTX
             )
             pT = pT * dropout_mask.to(pT.dtype) * dropout_scale
-        do = tl.load(do_ptrs)
-        # Compute dV.
+
+        # Compute dV
         ppT = pT
         ppT = ppT.to(dtype)
+        do = tl.load(do_ptrs)
         dv += tl.dot(ppT, do.to(dtype)).to(do.dtype)
         # NOTE: D (= delta) is pre-divided by ds_scale.
         Di = tl.load(D + offs_m)
-        # Compute dP and dS.
+
+        # Compute dP and dS to derive dK
         dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
+
         if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
             dpT = dpT * dropout_mask.to(dpT.dtype) * dropout_scale
+
         dsT = pT * (dpT - Di[None, :])
-        # # Apply mask to attention score gradients.
-        # if MASK:
-        #     dsT = tl.where(causal_mask, dsT, 0.0)
-        # if MASK_TYPE > 0:
-        #     if MASK_TYPE == 1:
-        #         dsT = tl.where(mask, dsT, 0.0)
-        #     elif MASK_TYPE == 2:
-        #         attend = mask != MASK_CONST
-        #         dsT = tl.where(attend, dsT, 0.0)
         dsT = dsT.to(dtype)
         dk += tl.dot(dsT, tl.trans(qT).to(dtype)).to(qT.dtype)
-        # Increment pointers.
+
+        # Increment pointers
         curr_m += step_m
         qT_ptrs += step_m * stride_tok
         do_ptrs += step_m * stride_tok
+
+        if MASK_TYPE > 0:
+            mask_ptr += step_m * mask_stride_tok1
+
     return dk, dv
 
 
@@ -1411,9 +1448,11 @@ def _attn_bwd_dq(
     start_m,
     start_n,
     num_steps,  #
-    MASK: tl.constexpr,
+    CAUSAL_MASKING: tl.constexpr,
     # Args for masking/dropout
     mask_ptr,
+    mask_stride_tok1,
+    mask_stride_tok2,
     MASK_TYPE: tl.constexpr,
     dropout_p,
     philox_seed,
@@ -1440,8 +1479,10 @@ def _attn_bwd_dq(
         start_m: Starting index for M dimension.
         start_n: Starting index for N dimension.
         num_steps: Number of steps to unroll.
-        MASK: Masking tensor.
+        CAUSAL_MASKING: Flag for causal masking.
         mask_ptr: Pointer to the mask tensor.
+        mask_stride_tok1: Stride for the third (row) dimension of the mask tensor.
+        mask_stride_tok2: Stride for the fourth (column) dimension of the mask tensor.
         MASK_TYPE: Type of masking (0: no mask, 1: boolean mask,
                         2: additive mask).
         dropout_p: Dropout probability.
@@ -1453,71 +1494,85 @@ def _attn_bwd_dq(
     Returns:
         dq: Gradient of the query tensor.
     """
+    # Initialize pointers for K, V, and DO
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
-    offs_k = tl.arange(0, HEAD_DIM)
-    kT_ptrs = K + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
-    vT_ptrs = V + offs_n[None, :] * stride_tok + offs_k[:, None] * stride_d
+    offs_h = tl.arange(0, HEAD_DIM)
+    kT_ptrs = K + offs_n[None, :] * stride_tok + offs_h[:, None] * stride_d
+    vT_ptrs = V + offs_n[None, :] * stride_tok + offs_h[:, None] * stride_d
+
+    if MASK_TYPE > 0:
+        mask_ptr = (
+            mask_ptr + offs_m[:, None] * mask_stride_tok1 + offs_n[None, :] * mask_stride_tok2
+        )
+
     # NOTE: D (= delta) is pre-divided by ds_scale.
     Di = tl.load(D + offs_m)
-    # BLOCK_M2 must be a multiple of BLOCK_N2, otherwise the code wouldn't work.
+
+    # NOTE: BLOCK_M2 must be a multiple of BLOCK_N2, otherwise the code wouldn't work.
     tl.static_assert(BLOCK_M2 % BLOCK_N2 == 0)
     curr_n = start_n
     step_n = BLOCK_N2
     dtype = tl.float32  # For dot products
-    for blk_idx in range(num_steps):
+
+    # Iteratively compute dQ over the N dimension
+    for _ in range(num_steps):
         offs_n = curr_n + tl.arange(0, BLOCK_N2)
         kT = tl.load(kT_ptrs)
         vT = tl.load(vT_ptrs)
         qk = tl.dot(q, kT)
-        # Causal masking before exponentiation.
-        if MASK:
-            causal_mask = offs_m[:, None] >= offs_n[None, :]
-            qk = tl.where(causal_mask, qk, MASK_CONST)
-        # External masking before exponentiation.
-        if MASK_TYPE > 0:
-            mask_offs = offs_m[:, None] * N_CTX + offs_n[None, :]
-            mask = tl.load(mask_ptr + mask_offs)
-            if MASK_TYPE == 1:
-                qk = tl.where(mask, qk, MASK_CONST)
-            elif MASK_TYPE == 2:
-                qk += mask
-        # Exponentiation.
+
+        # Exponentiation
         p = tl.math.exp2(qk - m)
-        # Dropout after exponentiation.
+
+        # External masking after exponentiation
+        if MASK_TYPE > 0:
+            mask = tl.load(mask_ptr)
+            if MASK_TYPE == 1:  # Boolean mask
+                p = tl.where(mask == 1, p, 0.0)
+            elif MASK_TYPE == 2:  # Additive mask
+                attend = mask != MASK_CONST
+                p = tl.where(attend, p, 0.0)
+
+        # (or) Causal masking after exponentiation
+        elif CAUSAL_MASKING:
+            causal_mask = offs_m[:, None] >= offs_n[None, :]
+            p = tl.where(causal_mask, p, 0.0)
+
+        # Dropout after exponentiation
         if ENABLE_DROPOUT:
             philox_offset = philox_offset_base + start_m * N_CTX + curr_n
             dropout_mask, dropout_scale = create_dropout_mask(
                 philox_seed, philox_offset, dropout_p, BLOCK_M2, BLOCK_N2, N_CTX
             )
             p = p * dropout_mask.to(p.dtype) * dropout_scale
-        # Compute dP and dS.
+
+        # Compute dP and dS
         dp = tl.dot(do, vT).to(tl.float32)
-        if ENABLE_DROPOUT:  # This derivative should be masked with the same dropout mask
+
+        if ENABLE_DROPOUT:  # NOTE: This derivative should be masked with the same dropout mask.
             dp = dp * dropout_mask.to(dp.dtype) * dropout_scale
+
         ds = p * (dp - Di[:, None])
-        # # Apply mask to attention score gradients.
-        # if MASK:
-        #     ds = tl.where(causal_mask, ds, 0.0)
-        # if MASK_TYPE > 0:
-        #     if MASK_TYPE == 1:
-        #         ds = tl.where(mask, ds, 0.0)
-        #     elif MASK_TYPE == 2:
-        #         attend = mask != MASK_CONST
-        #         ds = tl.where(attend, ds, 0.0)
-        ds = ds.to(dtype)
-        # Compute dQ.
+
+        # Compute dQ
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
+        ds = ds.to(dtype)
         dq += tl.dot(ds, tl.trans(kT).to(dtype)).to(kT.dtype)
-        # Increment pointers.
+
+        # Increment pointers
         curr_n += step_n
         kT_ptrs += step_n * stride_tok
         vT_ptrs += step_n * stride_tok
+
+        if MASK_TYPE > 0:
+            mask_ptr += step_n * mask_stride_tok2
+
     return dq
 
 
 @triton.jit
-def _attn_bwd(
+def _attn_bwd_causal(
     Q,
     K,
     V,
@@ -1528,11 +1583,17 @@ def _attn_bwd(
     DV,  #
     M,
     D,
-    # shared by Q/K/V/DO.
+    # Shared by Q/K/V/DO.
     stride_z,
     stride_h,
     stride_tok,
     stride_d,  #
+    # Used for the mask.
+    mask_stride_z,
+    mask_stride_h,
+    mask_stride_tok1,
+    mask_stride_tok2,
+    # Dimensions and sizes.
     H,
     N_CTX,  #
     BLOCK_M1: tl.constexpr,  #
@@ -1541,14 +1602,17 @@ def _attn_bwd(
     BLOCK_N2: tl.constexpr,  #
     BLK_SLICE_FACTOR: tl.constexpr,  #
     HEAD_DIM: tl.constexpr,
-    # Args for masking/dropout
+    # Args for masking/dropout.
     mask_ptr,
     MASK_TYPE: tl.constexpr,
     dropout_p,
     philox_seed,
     ENABLE_DROPOUT: tl.constexpr,
 ):
-    """The main backward pass for the attention mechanism.
+    """The main backward pass for the (causal) attention mechanism.
+
+    This computes gradients for only ~N²/2 pairwise token interactions,
+    since causal attention already masks out half of the interactions.
 
     Args:
         Q: Query tensor.
@@ -1565,6 +1629,10 @@ def _attn_bwd(
         stride_h: Stride for the head dimension.
         stride_tok: Stride for the token dimension.
         stride_d: Stride for the head dimension.
+        mask_stride_z: Stride for the z dimension in the mask tensor.
+        mask_stride_h: Stride for the head dimension in the mask tensor.
+        mask_stride_tok1: Stride for the first token (row) dimension in the mask tensor.
+        mask_stride_tok2: Stride for the second token (column) dimension in the mask tensor.
         H: Head dimension.
         N_CTX: Context length.
         BLOCK_M1: Block size for M dimension.
@@ -1580,45 +1648,64 @@ def _attn_bwd(
         philox_seed: Seed for Philox RNG.
         ENABLE_DROPOUT: Flag to enable dropout.
     """
+    # Constants
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
-    pid = tl.program_id(0)
-    bhid = tl.program_id(2)
-    off_chz = (bhid * N_CTX).to(tl.int64)
-    adj = (stride_h * (bhid % H) + stride_z * (bhid // H)).to(tl.int64)
+    # Collect sequence, batch, and head indices
+    start_block_id = tl.program_id(0)  # Which block (in the input query sequence) to process
+    off_hz = tl.program_id(
+        1
+    )  # Which head and batch element to process, with a program being a single head of a single batch element
+    off_z = (
+        off_hz // H
+    )  # Which batch element this program is assigned to (n.b., each batch element has H heads)
+    off_h = off_hz % H  # The position of the head to process in the batch
 
-    # Offset pointers for batch/head
-    Q += adj
-    K += adj
-    V += adj
-    DO += adj
-    DQ += adj
-    DK += adj
-    DV += adj
-    M += off_chz
-    D += off_chz
+    # NOTE: This allows one to get the (N_CTX, HEAD_DIM) block in Q, K, V, etc. by indexing it by batch and head
+    delta_shared_offset = (off_hz * N_CTX).to(tl.int64)
+    qkv_shared_offset = off_z.to(tl.int64) * stride_z + off_h.to(tl.int64) * stride_h
+
+    # Offset pointers for batch elements and heads
+    Q += qkv_shared_offset
+    K += qkv_shared_offset
+    V += qkv_shared_offset
+    DO += qkv_shared_offset
+    DQ += qkv_shared_offset
+    DK += qkv_shared_offset
+    DV += qkv_shared_offset
+
+    M += delta_shared_offset  # NOTE: These tensors have fewer dimensions.
+    D += delta_shared_offset
+
+    # Initialize pointer for the mask, if provided
+    if MASK_TYPE > 0:
+        mask_offset = off_z.to(tl.int64) * mask_stride_z + off_h.to(tl.int64) * mask_stride_h
+        mask_ptr += mask_offset
 
     # Generate philox offset for this block
-    philox_offset_base = bhid * N_CTX * N_CTX
+    philox_offset_base = off_hz * N_CTX * N_CTX
 
-    # Load scales
-    offs_k = tl.arange(0, HEAD_DIM)
+    # ====== COMPUTE dK and dV ======
+    # Determine step size for dK and dV computation
+    MASK_BLOCK_M1: tl.constexpr = BLOCK_M1 // BLK_SLICE_FACTOR
 
-    start_n = pid * BLOCK_N1
+    # Prepare offsets for loading Q/K/V/DO
+    start_n = start_block_id * BLOCK_N1
     start_m = start_n
 
-    MASK_BLOCK_M1: tl.constexpr = BLOCK_M1 // BLK_SLICE_FACTOR
+    # Load K and V: They will stay in SRAM throughout.
     offs_n = start_n + tl.arange(0, BLOCK_N1)
+    offs_h = tl.arange(0, HEAD_DIM)
 
-    dv = tl.zeros([BLOCK_N1, HEAD_DIM], dtype=tl.float32)
+    k = tl.load(K + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d)
+    v = tl.load(V + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d)
+
+    # Initialize dK and dV accumulators
     dk = tl.zeros([BLOCK_N1, HEAD_DIM], dtype=tl.float32)
+    dv = tl.zeros([BLOCK_N1, HEAD_DIM], dtype=tl.float32)
 
-    # Load K and V: they stay in SRAM throughout the inner loop.
-    k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
-    v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
-
+    # Compute dK and dV for (causally) masked blocks
     num_steps = BLOCK_N1 // MASK_BLOCK_M1
-
     dk, dv = _attn_bwd_dkdv(
         dk,
         dv,  #
@@ -1637,8 +1724,10 @@ def _attn_bwd(
         start_n,
         start_m,
         num_steps,  #
-        MASK=True,  #
+        CAUSAL_MASKING=True,  #
         mask_ptr=mask_ptr,
+        mask_stride_tok1=mask_stride_tok1,
+        mask_stride_tok2=mask_stride_tok2,
         MASK_TYPE=MASK_TYPE,
         dropout_p=dropout_p,
         philox_seed=philox_seed,
@@ -1649,7 +1738,7 @@ def _attn_bwd(
     start_m += num_steps * MASK_BLOCK_M1
     num_steps = (N_CTX - start_m) // BLOCK_M1
 
-    # Compute dK and dV for non-masked blocks.
+    # Compute dK and dV for (causally) non-masked blocks
     dk, dv = _attn_bwd_dkdv(  #
         dk,
         dv,  #
@@ -1668,8 +1757,10 @@ def _attn_bwd(
         start_n,
         start_m,
         num_steps,  #
-        MASK=False,  #
+        CAUSAL_MASKING=False,  #
         mask_ptr=mask_ptr,
+        mask_stride_tok1=mask_stride_tok1,
+        mask_stride_tok2=mask_stride_tok2,
         MASK_TYPE=MASK_TYPE,
         dropout_p=dropout_p,
         philox_seed=philox_seed,
@@ -1677,35 +1768,42 @@ def _attn_bwd(
         ENABLE_DROPOUT=ENABLE_DROPOUT,
     )
 
-    dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
+    # Write-back dV
+    dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d
     tl.store(dv_ptrs, dv)
 
-    # Write back dK.
+    # Write-back dK (scaled)
     dk *= sm_scale
-    dk_ptrs = DK + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
+    dk_ptrs = DK + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d
     tl.store(dk_ptrs, dk)
 
-    # NOTE: THIS BLOCK DOES DQ:
-    start_m = pid * BLOCK_M2
+    # ====== COMPUTE dQ ======
+    # Determine step size for dQ computation
+    MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
+
+    # Prepare offsets for dQ computation
+    start_m = start_block_id * BLOCK_M2
     end_n = start_m + BLOCK_M2
 
-    MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
     offs_m = start_m + tl.arange(0, BLOCK_M2)
 
-    q = tl.load(Q + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
-    dq = tl.zeros([BLOCK_M2, HEAD_DIM], dtype=tl.float32)
-    do = tl.load(DO + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
+    # Load Q, DO, and M: They will stay in SRAM throughout.
+    q = tl.load(Q + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d)
+    do = tl.load(DO + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d)
 
     m = tl.load(M + offs_m)
     m = m[:, None]
 
-    # Compute dQ for masked (diagonal) blocks.
-    # NOTE: This code scans each row of QK^T backward (from right to left,
-    # but inside each call to _attn_bwd_dq, from left to right), but that's
-    # not due to anything important.  I just wanted to reuse the loop
-    # structure for dK & dV above as much as possible.
+    # Initialize dQ accumulator
+    dq = tl.zeros([BLOCK_M2, HEAD_DIM], dtype=tl.float32)
+
+    # Compute dQ for (causally) masked blocks
     num_steps = BLOCK_M2 // MASK_BLOCK_N2
     dq = _attn_bwd_dq(
+        # NOTE: This code scans each row of QK^T backward (from right to left,
+        # but inside each call to _attn_bwd_dq, from left to right), but that's
+        # not due to anything important. It's just to reuse the loop structure
+        # for dK and dV above as much as possible.
         dq,
         q,
         K,
@@ -1722,16 +1820,20 @@ def _attn_bwd(
         start_m,
         end_n - num_steps * MASK_BLOCK_N2,
         num_steps,  #
-        MASK=True,  #
+        CAUSAL_MASKING=True,  #
         mask_ptr=mask_ptr,
+        mask_stride_tok1=mask_stride_tok1,
+        mask_stride_tok2=mask_stride_tok2,
         MASK_TYPE=MASK_TYPE,
         dropout_p=dropout_p,
         philox_seed=philox_seed,
         philox_offset_base=philox_offset_base,
         ENABLE_DROPOUT=ENABLE_DROPOUT,
     )
+
     end_n -= num_steps * MASK_BLOCK_N2
-    # Stage 2
+
+    # Compute dQ for (causally) non-masked blocks
     num_steps = end_n // BLOCK_N2
     dq = _attn_bwd_dq(
         dq,
@@ -1750,17 +1852,248 @@ def _attn_bwd(
         start_m,
         end_n - num_steps * BLOCK_N2,
         num_steps,  #
-        MASK=False,  #
+        CAUSAL_MASKING=False,  #
         mask_ptr=mask_ptr,
+        mask_stride_tok1=mask_stride_tok1,
+        mask_stride_tok2=mask_stride_tok2,
         MASK_TYPE=MASK_TYPE,
         dropout_p=dropout_p,
         philox_seed=philox_seed,
         philox_offset_base=philox_offset_base,
         ENABLE_DROPOUT=ENABLE_DROPOUT,
     )
-    # Write back dQ.
-    dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
+
+    # Write-back dQ (scaled)
     dq *= LN2
+    dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d
+    tl.store(dq_ptrs, dq)
+
+
+@triton.jit
+def _attn_bwd(
+    Q,
+    K,
+    V,
+    sm_scale,  #
+    DO,  #
+    DQ,
+    DK,
+    DV,  #
+    M,
+    D,
+    # Shared by Q/K/V/DO.
+    stride_z,
+    stride_h,
+    stride_tok,
+    stride_d,  #
+    # Used for the mask.
+    mask_stride_z,
+    mask_stride_h,
+    mask_stride_tok1,
+    mask_stride_tok2,
+    # Dimensions and sizes.
+    H,
+    N_CTX,  #
+    BLOCK_M1: tl.constexpr,  #
+    BLOCK_N1: tl.constexpr,  #
+    BLOCK_M2: tl.constexpr,  #
+    BLOCK_N2: tl.constexpr,  #
+    BLK_SLICE_FACTOR: tl.constexpr,  #
+    HEAD_DIM: tl.constexpr,
+    # Args for masking/dropout.
+    mask_ptr,
+    MASK_TYPE: tl.constexpr,
+    dropout_p,
+    philox_seed,
+    ENABLE_DROPOUT: tl.constexpr,
+):
+    """The main backward pass for the (non-causal) attention mechanism.
+
+    This computes gradients for all N² pairwise token interactions,
+    unlike the causal version which only computes ~N²/2.
+
+    Args:
+        Q: Query tensor.
+        K: Key tensor.
+        V: Value tensor.
+        sm_scale: Scale factor for the softmax.
+        DO: Gradient of the output tensor.
+        DQ: Gradient of the query tensor.
+        DK: Gradient of the key tensor.
+        DV: Gradient of the value tensor.
+        M: Memory tensor.
+        D: Delta tensor.
+        stride_z: Stride for the z dimension.
+        stride_h: Stride for the head dimension.
+        stride_tok: Stride for the token dimension.
+        stride_d: Stride for the head dimension.
+        mask_stride_z: Stride for the z dimension in the mask tensor.
+        mask_stride_h: Stride for the head dimension in the mask tensor.
+        mask_stride_tok1: Stride for the first token (row) dimension in the mask tensor.
+        mask_stride_tok2: Stride for the second token (column) dimension in the mask tensor.
+        H: Head dimension.
+        N_CTX: Context length.
+        BLOCK_M1: Block size for M dimension.
+        BLOCK_N1: Block size for N dimension.
+        BLOCK_M2: Block size for M dimension.
+        BLOCK_N2: Block size for N dimension.
+        BLK_SLICE_FACTOR: Block slice factor.
+        HEAD_DIM: Head dimension size.
+        mask_ptr: Pointer to the mask tensor.
+        MASK_TYPE: Type of masking (0: no mask, 1: boolean mask,
+                        2: additive mask).
+        dropout_p: Dropout probability.
+        philox_seed: Seed for Philox RNG.
+        ENABLE_DROPOUT: Flag to enable dropout.
+    """
+    # Constants
+    LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
+
+    # Collect sequence, batch, and head indices
+    start_block_id = tl.program_id(0)  # Which block (in the input query sequence) to process
+    off_hz = tl.program_id(
+        1
+    )  # Which head and batch element to process, with a program being a single head of a single batch element
+    off_z = (
+        off_hz // H
+    )  # Which batch element this program is assigned to (n.b., each batch element has H heads)
+    off_h = off_hz % H  # The position of the head to process in the batch
+
+    # NOTE: This allows one to get the (N_CTX, HEAD_DIM) block in Q, K, V, etc. by indexing it by batch and head
+    delta_shared_offset = (off_hz * N_CTX).to(tl.int64)
+    qkv_shared_offset = off_z.to(tl.int64) * stride_z + off_h.to(tl.int64) * stride_h
+
+    # Offset pointers for batch elements and heads
+    Q += qkv_shared_offset
+    K += qkv_shared_offset
+    V += qkv_shared_offset
+    DO += qkv_shared_offset
+    DQ += qkv_shared_offset
+    DK += qkv_shared_offset
+    DV += qkv_shared_offset
+
+    M += delta_shared_offset  # NOTE: These tensors have fewer dimensions.
+    D += delta_shared_offset
+
+    # Initialize pointer for the mask, if provided
+    if MASK_TYPE > 0:
+        mask_offset = off_z.to(tl.int64) * mask_stride_z + off_h.to(tl.int64) * mask_stride_h
+        mask_ptr += mask_offset
+
+    # Generate philox offset for this block
+    philox_offset_base = off_hz * N_CTX * N_CTX
+
+    # ====== COMPUTE dK and dV ======
+    # For non-causal attention, we process ALL query blocks (the entire sequence)
+    # This is the key difference from causal: we iterate through all Q positions
+
+    # Prepare offsets for loading Q/K/V/DO
+    start_n = start_block_id * BLOCK_N1
+
+    # Load K and V: They will stay in SRAM throughout.
+    offs_n = start_n + tl.arange(0, BLOCK_N1)
+    offs_h = tl.arange(0, HEAD_DIM)
+
+    k = tl.load(K + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d)
+    v = tl.load(V + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d)
+
+    # Initialize dK and dV accumulators
+    dk = tl.zeros([BLOCK_N1, HEAD_DIM], dtype=tl.float32)
+    dv = tl.zeros([BLOCK_N1, HEAD_DIM], dtype=tl.float32)
+
+    start_m = 0  # Start from the beginning of the sequence
+    num_steps = N_CTX // BLOCK_M1  # Process the entire sequence
+
+    dk, dv = _attn_bwd_dkdv(
+        dk,
+        dv,  #
+        Q,
+        k,
+        v,
+        DO,  #
+        M,
+        D,  #
+        stride_tok,
+        stride_d,  #
+        N_CTX,  #
+        BLOCK_M1,
+        BLOCK_N1,
+        HEAD_DIM,  #
+        start_n,
+        start_m,
+        num_steps,  #
+        CAUSAL_MASKING=False,
+        mask_ptr=mask_ptr,
+        mask_stride_tok1=mask_stride_tok1,
+        mask_stride_tok2=mask_stride_tok2,
+        MASK_TYPE=MASK_TYPE,
+        dropout_p=dropout_p,
+        philox_seed=philox_seed,
+        philox_offset_base=philox_offset_base,
+        ENABLE_DROPOUT=ENABLE_DROPOUT,
+    )
+
+    # Write-back dV
+    dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d
+    tl.store(dv_ptrs, dv)
+
+    # Write-back dK (scaled)
+    dk *= sm_scale
+    dk_ptrs = DK + offs_n[:, None] * stride_tok + offs_h[None, :] * stride_d
+    tl.store(dk_ptrs, dk)
+
+    # ====== COMPUTE dQ ======
+    # Prepare offsets for dQ computation
+    start_m = start_block_id * BLOCK_M2
+    offs_m = start_m + tl.arange(0, BLOCK_M2)
+
+    # Load Q, DO, and M: They will stay in SRAM throughout.
+    q = tl.load(Q + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d)
+    do = tl.load(DO + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d)
+
+    m = tl.load(M + offs_m)
+    m = m[:, None]
+
+    # Initialize dQ accumulator
+    dq = tl.zeros([BLOCK_M2, HEAD_DIM], dtype=tl.float32)
+
+    # For non-causal attention, we process ALL key/value blocks (the entire sequence)
+    # This means each query position can attend to ALL key/value positions
+
+    start_n = 0  # Start from the beginning of the sequence
+    num_steps = N_CTX // BLOCK_N2  # Process the entire sequence
+
+    dq = _attn_bwd_dq(
+        dq,
+        q,
+        K,
+        V,  #
+        do,
+        m,
+        D,  #
+        stride_tok,
+        stride_d,  #
+        N_CTX,  #
+        BLOCK_M2,
+        BLOCK_N2,
+        HEAD_DIM,  #
+        start_m,
+        start_n,
+        num_steps,  #
+        CAUSAL_MASKING=False,  #
+        mask_ptr=mask_ptr,
+        mask_stride_tok1=mask_stride_tok1,
+        mask_stride_tok2=mask_stride_tok2,
+        MASK_TYPE=MASK_TYPE,
+        dropout_p=dropout_p,
+        philox_seed=philox_seed,
+        philox_offset_base=philox_offset_base,
+        ENABLE_DROPOUT=ENABLE_DROPOUT,
+    )
+
+    # Write-back dQ (scaled)
+    dq *= LN2
+    dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_h[None, :] * stride_d
     tl.store(dq_ptrs, dq)
 
 
@@ -1828,6 +2161,7 @@ class JVPAttn(Function):
         sm_scale: None
         warp_specialize: None
         USE_TMA: None
+        verify_attn_mask: None
 
     class Strides(NamedTuple):
         """Strides for JVP Attention."""
@@ -1851,8 +2185,13 @@ class JVPAttn(Function):
         sm_scale: float | None = None,
         warp_specialize: bool = True,
         USE_TMA: bool = True,
+        verify_attn_mask: bool = False,
     ) -> JVPAttn.FwdOut:
         """Forward pass for JVP Attention.
+
+        NOTE: The following warning(s) will be raised if `verify_attn_mask=False`
+        and an attention mask with any all-null head is provided:
+            `RuntimeWarning: overflow encountered in exp2.`
 
         Args:
             q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
@@ -1861,12 +2200,19 @@ class JVPAttn(Function):
             q_t: Optional tensor for query transpose.
             k_t: Optional tensor for key transpose.
             v_t: Optional tensor for value transpose.
-            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
+            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX).
+                Two types of masks are supported. A boolean mask where a value
+                of True indicates that the element should take part in attention,
+                or a float mask of the same type as query, key, value that is added
+                to the attention score. The constant `MASK_CONST` is used to
+                indicate masked positions in the float mask. All other values
+                denote unmasked positions.
             dropout_p: Dropout probability.
             causal: Whether the attention is causal.
             sm_scale: Optional scaling factor for softmax.
             warp_specialize: Whether to use warp specialization.
             USE_TMA: Whether to use TMA.
+            verify_attn_mask: Whether to verify the correctness of the provided attention mask.
 
         Returns:
             Outputs of JVP Attention.
@@ -1874,13 +2220,22 @@ class JVPAttn(Function):
         if dropout_p != 0.0:
             raise NotImplementedError("Dropout is not currently supported in JVP attention.")
 
-        # Shape constraints
+        # Collect metadata
         Z, H, N_CTX, HEAD_DIM_Q = q.shape
         HEAD_DIM_K = k.shape[-1]
-        # NOTE: When v is in float8_e5m2 it is transposed.
-        HEAD_DIM_V = v.shape[-1]
-        assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
-        assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+        HEAD_DIM_V = v.shape[-1]  # NOTE: When v is in float8_e5m2 it is transposed.
+
+        STAGE = 3 if causal else 1
+        ENABLE_JVP = q_t is not None
+
+        assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V, (
+            "JVP attention requires HEAD_DIM_Q == HEAD_DIM_K == HEAD_DIM_V"
+            f" but got HEAD_DIM_Q={HEAD_DIM_Q}, HEAD_DIM_K={HEAD_DIM_K}, HEAD_DIM_V={HEAD_DIM_V}"
+        )
+        assert HEAD_DIM_K in {16, 32, 64, 128, 256}, (
+            "JVP attention only supports HEAD_DIM_K in {16, 32, 64, 128, 256},"
+            f" but got HEAD_DIM_K={HEAD_DIM_K}",
+        )
 
         if causal and attn_mask is not None:
             raise ValueError("Causal attention does not support an attention mask.")
@@ -1896,14 +2251,17 @@ class JVPAttn(Function):
                 q.dtype,
             }, "The attention mask must be of the dtype bool or that of the query tensor."
 
+        # Initialize arguments and tensors
         if sm_scale is None:
             sm_scale = HEAD_DIM_K**-0.5
+
         o = torch.empty_like(q)
-        ENABLE_JVP = q_t is not None
         o_t: Tensor | None = torch.empty_like(q_t) if ENABLE_JVP else None
-        stage = 3 if causal else 1
+        M = torch.empty((Z, H, N_CTX), device=q.device, dtype=torch.float32)
+
+        # Tune kernel for custom (e.g., AMD) targets
         extra_kern_args = {}
-        # Tuning for AMD target
+
         if is_hip():
             waves_per_eu = 3 if HEAD_DIM_K <= 64 else 2
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
@@ -1913,10 +2271,8 @@ class JVPAttn(Function):
             if (HEAD_DIM_K == 128 and q.dtype == torch.float16) or ENABLE_JVP:
                 extra_kern_args["maxnreg"] = 168
             else:
-                # TODO: I think for backwards pass of dim=128 this is too low for H100; register allocation fails
+                # NOTE: For backward pass with HEAD_DIM_K=128, this is probably too low for H100; register allocation fails.
                 extra_kern_args["maxnreg"] = 80
-
-        M = torch.empty((Z, H, N_CTX), device=q.device, dtype=torch.float32)
 
         if hasattr(triton, "set_allocator") and is_cuda():
 
@@ -1937,36 +2293,50 @@ class JVPAttn(Function):
             mask_strides = (0, 0, 0, 0)
         elif attn_mask.dtype == torch.bool:
             MASK_TYPE = 1
-            mask_tensor = attn_mask
+            mask_tensor = attn_mask.contiguous()
             mask_strides = strides_zhnd(attn_mask)
+            if verify_attn_mask:
+                # Check if any head is all False
+                assert mask_tensor.any(
+                    dim=(-1, -2)
+                ).all(), "The attention mask cannot be all False for any head."
         else:
             MASK_TYPE = 2
-            mask_tensor = attn_mask.to(q.dtype)
+            mask_tensor = attn_mask.to(q.dtype).contiguous()
             mask_strides = strides_zhnd(attn_mask)
+            if verify_attn_mask:
+                # Check if the mask contains -inf/inf/NaN or is all MASK_CONST for any head
+                assert not torch.isinf(
+                    mask_tensor
+                ).any(), "The attention mask cannot contain -inf or inf."
+                assert not torch.isnan(
+                    mask_tensor
+                ).any(), "The attention mask cannot contain NaNs."
+                assert (
+                    (mask_tensor != MASK_CONST).any(dim=(-1, -2)).all()
+                ), f"The attention mask cannot be all {MASK_CONST} (the masking constant) for any head."
 
-        # Setup dropout
+        # Prepare dropout arguments
         ENABLE_DROPOUT = dropout_p > 0.0
         if ENABLE_DROPOUT:
             philox_seed = torch.randint(0, 2**32, (1,), device=q.device, dtype=torch.int64).item()
         else:
             philox_seed = 0
 
-        # Grid setup
+        # Set up grid for kernel launch
         Z_H = Z * H
 
         def grid(META: dict[str, Any]) -> JVPAttn.Grid:
             """Determine grid configuration."""
             return JVPAttn.Grid(triton.cdiv(N_CTX, META["BLOCK_M"]), Z_H, 1)
 
-        # if USE_TMA and supports_tma() and not (torch.cuda.get_device_capability()[0] == 9
-        #                                        and q.dtype == torch.float8_e5m2):
         if USE_TMA and supports_tma():
             if attn_mask or ENABLE_DROPOUT:
                 raise NotImplementedError(
                     "TMA kernel currently does not support attention masking or dropout."
                 )
 
-            # NOTE: On Hopper we cannot perform a FP8 dot with a non-transposed second tensor
+            # NOTE: On Hopper, we cannot perform a FP8 dot with a non-transposed second tensor.
             y_dim = Z_H * N_CTX
 
             dummy_block = [1, 1]
@@ -2056,7 +2426,7 @@ class JVPAttn(Function):
                 N_CTX=N_CTX,  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
-                STAGE=stage,  #
+                STAGE=STAGE,  #
                 warp_specialize=warp_specialize,  #
                 ENABLE_JVP=ENABLE_JVP,  #
                 # NOTE: The following are safe (unit-tested) default values
@@ -2066,8 +2436,8 @@ class JVPAttn(Function):
                 num_warps=4,  #
                 **extra_kern_args,
             )
-        else:
 
+        else:
             _attn_fwd[grid](
                 q,
                 k,
@@ -2096,7 +2466,7 @@ class JVPAttn(Function):
                 N_CTX=N_CTX,  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
-                STAGE=stage,  #
+                STAGE=STAGE,  #
                 warp_specialize=warp_specialize,  #
                 ENABLE_JVP=ENABLE_JVP,  #
                 ENABLE_DROPOUT=ENABLE_DROPOUT,
@@ -2147,7 +2517,9 @@ class JVPAttn(Function):
             sm_scale,
             warp_specialize,
             USE_TMA,
+            verify_attn_mask,
         ) = inputs
+
         o, (
             o_t,
             M,
@@ -2160,9 +2532,11 @@ class JVPAttn(Function):
             philox_seed,
             ENABLE_DROPOUT,
         ) = outputs
+
         ctx.grid = grid
         ctx.save_for_forward(o_t)
         ctx.save_for_backward(q, k, v, o, M)
+
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM_K = HEAD_DIM_K
         ctx.causal = causal
@@ -2207,6 +2581,7 @@ class JVPAttn(Function):
         """
         if not (q.is_contiguous() and k.is_contiguous() and v.is_contiguous()):
             q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+
         out: JVPAttn.FwdOut = JVPAttn.apply(
             q,
             k,
@@ -2221,6 +2596,7 @@ class JVPAttn(Function):
             warp_specialize,
             USE_TMA,
         )
+
         a, _ = out
         return a
 
@@ -2258,6 +2634,7 @@ class JVPAttn(Function):
         q_p, q_t = fwAD.unpack_dual(q)
         k_p, k_t = fwAD.unpack_dual(k)
         v_p, v_t = fwAD.unpack_dual(v)
+
         # NOTE: We pass some dualtensor args to ensure jvp() will be called,
         # but we also pass tangents separately, as forward() demotes dual
         # tensor args to primals for some reason.
@@ -2275,6 +2652,7 @@ class JVPAttn(Function):
             warp_specialize,
             USE_TMA,
         )
+
         a, _ = out
         return a
 
@@ -2310,51 +2688,88 @@ class JVPAttn(Function):
         q, k, v, o, M = ctx.saved_tensors
 
         # Ensure inputs/outputs the kernel reads share the same (contiguous) layout
-        if (
-            not q.is_contiguous()
-            or not k.is_contiguous()
-            or not v.is_contiguous()
-            or not o.is_contiguous()
+        if not (
+            q.is_contiguous() and k.is_contiguous() and v.is_contiguous() and o.is_contiguous()
         ):
-            raise RuntimeError(
-                "JVPAttn expects q, k, v, o to be contiguous; call .contiguous() in forward."
+            raise ValueError(
+                "JVPAttn expected q, k, v, o to be contiguous; got "
+                f"q.is_contiguous()={q.is_contiguous()}, k.is_contiguous()={k.is_contiguous()}, "
+                f"v.is_contiguous()={v.is_contiguous()}, o.is_contiguous()={o.is_contiguous()}, "
+                f"do.is_contiguous()={do.is_contiguous()}"
             )
 
-        # Autograd may deliver a non-contiguous grad_output; normalize it.
-        if (not do.is_contiguous()) or (do.stride() != o.stride()):
+        # NOTE: Autograd may deliver a non-contiguous output gradient; if so, normalize it.
+        if not do.is_contiguous():
             do = do.contiguous()
 
-        assert do.is_contiguous()
+        # Ensure all inputs/outputs the kernel reads share the same layout
+        assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride(), (
+            "JVPAttn expected q, k, v, o, do to have the same layout; got "
+            f"q.stride()={q.stride()}, k.stride()={k.stride()}, v.stride()={v.stride()}, "
+            f"o.stride()={o.stride()}, do.stride()={do.stride()}"
+        )
 
-        assert q.stride() == k.stride() == v.stride() == o.stride()
-        assert do.stride() == o.stride()
-
+        # Initialize tensors for gradients
         dq = torch.empty_like(q)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
-        BATCH, N_HEAD, N_CTX = q.shape[:3]
-        PRE_BLOCK = MIN_SEQUENCE_LENGTH  # NOTE: Adjust according to minimum input sequence length
-        NUM_WARPS, NUM_STAGES = 4, NUM_STAGES_OPTIONS[0]
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, PRE_BLOCK, PRE_BLOCK, 32
-        BLK_SLICE_FACTOR = 2
+        delta = torch.empty_like(M)
+
+        # Collect metadata
+        Z, H, N_CTX = q.shape[:3]
+
+        BLK_SLICE_FACTOR = 2  # NOTE: This is a safe default value to reduce backward memory usage
+        BLOCK_MIN = MIN_SEQUENCE_LENGTH  # NOTE: Adjust according to minimum input sequence length
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = BLOCK_MIN, BLOCK_MIN, BLOCK_MIN, BLOCK_MIN
+
+        assert N_CTX % BLOCK_MIN == 0, f"N_CTX must be divisible by BLOCK_MIN={BLOCK_MIN}"
+
+        if not ctx.causal:
+            assert (
+                BLOCK_M1 == BLOCK_M2 == BLOCK_N1 == BLOCK_N2
+            ), "For non-causal attention, all block sizes must be equal."
+
+        # Scale k by sm_scale / ln(2) to account for softmax scaling and
+        # change-of-base of exponentiation (exp2).
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
         arg_k = k
         arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
-        assert N_CTX % PRE_BLOCK == 0
-        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = torch.empty_like(M)
+
+        # Determine mask type
+        if ctx.MASK_TYPE == 0:
+            mask_strides = (0, 0, 0, 0)
+        else:
+            mask_strides = (
+                ctx.mask_tensor.stride(0),
+                ctx.mask_tensor.stride(1),
+                ctx.mask_tensor.stride(2),
+                ctx.mask_tensor.stride(3),
+            )
+
+        # Set up grid for kernel launch
+        Z_H = Z * H
+
+        # Preprocess output's deltas
+        pre_grid = (N_CTX // BLOCK_MIN, Z_H)
         _attn_bwd_preprocess[pre_grid](
             o,
             do,  #
             delta,  #
-            BATCH,
-            N_HEAD,
             N_CTX,  #
-            BLOCK_M=PRE_BLOCK,
+            BLOCK_M=BLOCK_MIN,
             HEAD_DIM=ctx.HEAD_DIM_K,  #
         )
-        grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
-        _attn_bwd[grid](
+
+        # Launch the backward kernel, enabling pipelining for backward pass on A100s
+        grid = (N_CTX // BLOCK_MIN, Z_H)
+        bwd_kernel = _attn_bwd_causal if ctx.causal else _attn_bwd
+        num_stages = (
+            5
+            if is_cuda() and torch.cuda.get_device_capability()[0] == 9
+            else NUM_STAGES_OPTIONS[0]
+        )
+
+        bwd_kernel[grid](
             q,
             arg_k,
             v,
@@ -2369,7 +2784,11 @@ class JVPAttn(Function):
             q.stride(1),
             q.stride(2),
             q.stride(3),  #
-            N_HEAD,
+            mask_strides[0],
+            mask_strides[1],
+            mask_strides[2],
+            mask_strides[3],  #
+            H,
             N_CTX,  #
             BLOCK_M1=BLOCK_M1,
             BLOCK_N1=BLOCK_N1,  #
@@ -2382,11 +2801,14 @@ class JVPAttn(Function):
             dropout_p=ctx.dropout_p,
             philox_seed=ctx.philox_seed,
             ENABLE_DROPOUT=ctx.ENABLE_DROPOUT,
-            num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES,  #
+            # NOTE: The following are safe (unit-tested) default values
+            num_stages=num_stages,  #
+            num_warps=4,  #
         )
 
-        return JVPAttn.BwdOut(dq, dk, dv, None, None, None, None, None, None, None, None, None)
+        return JVPAttn.BwdOut(
+            dq, dk, dv, None, None, None, None, None, None, None, None, None, None
+        )
 
 
 attention = JVPAttn.fwd
