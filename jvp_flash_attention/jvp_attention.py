@@ -2200,7 +2200,7 @@ class JVPAttn(Function):
     ) -> JVPAttn.FwdOut:
         """Forward pass for JVP Attention.
 
-        NOTE: The following warning(s) will be raised if `verify_attn_mask=False`
+        NOTE: The following warning(s) will be raised if `verify_attn_mask=True`
         and an attention mask with any all-null head is provided:
             `RuntimeWarning: overflow encountered in exp2.`
 
