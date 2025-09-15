@@ -70,7 +70,7 @@ If you want to run the unit tests verifying the correctness of the JVP Flash Att
 python tests/test_jvp_attention.py --dtype {float16,bfloat16,float32}
 ```
 
-In principle, the kernel should support ROCm systems as well, though it has not yet been tested on them. macOS is currently unsupported.
+In principle, the kernel should support ROCm systems as well, though it has not yet been tested on them. macOS is currently unsupported except using a CPU-only backend.
 
 Results for `float16`:
 
