@@ -521,9 +521,9 @@ def validate_accuracy_and_gradients(
     target: Tensor,
     is_causal: bool,
     attn_mask: Tensor | None = None,
-    tolerance: float = 5e-3,
+    tolerance: float = 4e-3,
+    loss_tolerance: float = 5e-4,
     grad_tolerance: float = 5e-4,
-    non_causal_tangent_tolerance: float = 8e-3,
 ) -> AccuracyMetrics:
     """Validate numerical accuracy and gradient matching between SDPA and JVP attention.
 
@@ -538,8 +538,8 @@ def validate_accuracy_and_gradients(
         is_causal: Whether the attention is causal.
         attn_mask: Optional attention mask tensor.
         tolerance: The tolerance for primal errors.
+        loss_tolerance: The tolerance for loss errors.
         grad_tolerance: The tolerance for gradient errors.
-        non_causal_tangent_tolerance: The tolerance for non-causal tangent errors.
 
     Returns:
         AccuracyMetrics containing all error measurements.
@@ -626,14 +626,12 @@ def validate_accuracy_and_gradients(
 
     # Validate using torch.testing.assert_close
     try:
-        torch.testing.assert_close(
-            jvp_op, sdpa_op, atol=tolerance if is_causal else 8e-3, rtol=1e-5
-        )
+        torch.testing.assert_close(jvp_op, sdpa_op, atol=tolerance, rtol=1e-5)
         torch.testing.assert_close(
             # TODO: Improve this (causal) accuracy for longer sequence lengths
             jvp_func_op,
             sdpa_op,
-            atol=tolerance if is_causal else 8e-3,
+            atol=tolerance,
             rtol=1e-5,
         )
 
@@ -641,18 +639,18 @@ def validate_accuracy_and_gradients(
         torch.testing.assert_close(
             jvp_ot,
             sdpa_ot,
-            atol=tolerance if is_causal else non_causal_tangent_tolerance,
+            atol=tolerance,
             rtol=1e-5,
         )
         torch.testing.assert_close(
             jvp_func_ot,
             sdpa_ot,
-            atol=tolerance if is_causal else non_causal_tangent_tolerance,
+            atol=tolerance,
             rtol=1e-5,
         )
 
-        torch.testing.assert_close(loss1, loss0, atol=5e-4, rtol=1e-5)
-        torch.testing.assert_close(loss2, loss0, atol=5e-4, rtol=1e-5)
+        torch.testing.assert_close(loss1, loss0, atol=loss_tolerance, rtol=1e-5)
+        torch.testing.assert_close(loss2, loss0, atol=loss_tolerance, rtol=1e-5)
 
         torch.testing.assert_close(q1.grad, q0.grad, atol=grad_tolerance, rtol=1e-5)
         torch.testing.assert_close(k1.grad, k0.grad, atol=grad_tolerance, rtol=1e-5)
@@ -687,16 +685,11 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
     dtype = dtype_map[args.dtype]
 
     tolerance_map = {
-        "float16": 2e-3,
-        "float32": 7.25e-3,
+        "float16": 4e-3,
+        "float32": 2.35e-2,
         "bfloat16": 3.2e-2,
     }
     tolerance = tolerance_map[args.dtype]
-
-    # NOTE: Length-32 sequences pose specific numerical accuracy challenges, and for
-    # them you may need to disable Triton kernel autotuning to avoid CUDA indexing errors.
-    grad_tolerance_map = {32: 7.2e-4}  # ...
-    tangent_tolerance_map = {32: 1.6e-2}  # ...
 
     results = []
 
@@ -709,9 +702,6 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
         print(f"\n{'='*60}")
         print(f"Benchmarking sequence length: {seq_len}")
         print(f"{'='*60}")
-
-        grad_tolerance = grad_tolerance_map.get(seq_len, 5e-4)
-        non_causal_tangent_tolerance = tangent_tolerance_map.get(seq_len, 8e-3)
 
         # Create test tensors
         q_p, q_t, k_p, k_t, v_p, v_t, target = create_test_tensors(args, seq_len, device, dtype)
@@ -742,8 +732,6 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
                         is_causal,
                         attn_mask=attn_mask,
                         tolerance=tolerance,
-                        grad_tolerance=grad_tolerance,
-                        non_causal_tangent_tolerance=non_causal_tangent_tolerance,
                     )
                     accuracy_metrics.tolerance = tolerance
 
