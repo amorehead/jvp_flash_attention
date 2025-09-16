@@ -84,7 +84,7 @@ Contributions or enhancements are welcome!
 
 ## Tests
 
-If you want to run the unit tests verifying the correctness of the JVP Flash Attention Triton kernel, run the following command(s).
+If you want to run all the unit tests verifying the correctness of the JVP Flash Attention Triton kernel, run the following command(s).
 
 ```bash
 python tests/test_jvp_attention.py --dtype {float16,bfloat16,float32}
