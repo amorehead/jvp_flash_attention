@@ -17,11 +17,12 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.functional import scaled_dot_product_attention
 
 try:
+    import matplotlib.pyplot as plt
     import numpy as np
 
-    NUMPY_AVAILABLE = True
-except Exception:
-    NUMPY_AVAILABLE = False
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    PLOTTING_AVAILABLE = False
 
 from jvp_flash_attention.jvp_attention import MASK_CONST, JVPAttn
 
@@ -973,6 +974,123 @@ def print_mask_comparison_table(results: list[BenchmarkResult]) -> None:
             )
 
 
+def plot_benchmark_results(
+    results: list[BenchmarkResult], args: Args, verbose: bool = False
+) -> None:
+    """Generate, save, and display plots summarizing benchmark results.
+
+    Args:
+        results: The list of benchmark results to plot.
+        args: The command-line arguments, used for filename generation.
+        verbose: Whether to print verbose output.
+    """
+    if not PLOTTING_AVAILABLE:
+        print("\nmatplotlib and/or numpy not found. Skipping plotting.")
+        return
+
+    from collections import defaultdict
+
+    # Group results by (is_causal, mask_type) for creating subplots
+    grouped = defaultdict(list)
+    for r in results:
+        key = (r.is_causal, r.mask_type)
+        grouped[key].append(r)
+
+    num_configs = len(grouped)
+    if num_configs == 0:
+        return
+
+    # --- 1. Create and Populate the Performance Figure ---
+    fig_perf, axes_perf = plt.subplots(1, num_configs, figsize=(6 * num_configs, 5), squeeze=False)
+    fig_perf.suptitle("Performance Speedup (JVP Attention vs. SDPA)", fontsize=16)
+
+    # --- 2. Create and Populate the Memory Figure ---
+    fig_mem, axes_mem = plt.subplots(1, num_configs, figsize=(6 * num_configs, 5), squeeze=False)
+    fig_mem.suptitle("Peak Allocated Memory Comparison", fontsize=16)
+
+    # Iterate through data to draw on the axes of BOTH figures
+    for i, ((is_causal, mask_type), config_results) in enumerate(grouped.items()):
+        config_results.sort(key=lambda r: r.seq_len)
+
+        # Fixed: Use the correct method names "jvp_attn" and "sdpa"
+        jvp_results = [r for r in config_results if r.method == "jvp_attn"]
+        sdpa_results = [r for r in config_results if r.method == "sdpa"]
+
+        if not jvp_results or not sdpa_results:
+            # Debug print to help identify issues
+            if verbose:
+                print(
+                    f"Warning: Missing results for config (causal={is_causal}, mask={mask_type})"
+                )
+                print(f"  Available methods: {set(r.method for r in config_results)}")
+            continue
+
+        seq_lens = [r.seq_len for r in jvp_results]
+        jvp_times = np.array([r.time_ms for r in jvp_results])
+        sdpa_times = np.array([r.time_ms for r in sdpa_results])
+        jvp_mems = np.array([r.memory_allocated_mb for r in jvp_results])
+        sdpa_mems = np.array([r.memory_allocated_mb for r in sdpa_results])
+        speedup = sdpa_times / jvp_times
+        x = np.arange(len(seq_lens))
+
+        # Draw on the performance subplot
+        ax_perf = axes_perf[0, i]
+        bar_perf = ax_perf.bar(x, speedup, width=0.5, color="g")
+        ax_perf.bar_label(bar_perf, fmt=lambda val: f"{val:.2f}x")
+        ax_perf.axhline(1.0, color="grey", linestyle="--")
+        ax_perf.set(
+            ylabel="Speedup (SDPA Time / JVP Time)",
+            xlabel="Sequence Length",
+            title=f"Causal={is_causal}, Mask={mask_type}",
+            xticks=x,
+            xticklabels=seq_lens,
+            ylim=(0, max(1.1, np.max(speedup) * 1.15)),
+        )
+
+        # Draw on the memory subplot
+        ax_mem = axes_mem[0, i]
+        width = 0.35
+        rects1 = ax_mem.bar(x - width / 2, sdpa_mems, width, label="PyTorch SDPA")
+        rects2 = ax_mem.bar(x + width / 2, jvp_mems, width, label="JVP Attention")
+        ax_mem.bar_label(rects1, padding=3, fmt=lambda val: f"{val:.1f}")
+        ax_mem.bar_label(rects2, padding=3, fmt=lambda val: f"{val:.1f}")
+        ax_mem.set(
+            ylabel="Peak Allocated Memory (MB)",
+            xlabel="Sequence Length",
+            title=f"Causal={is_causal}, Mask={mask_type}",
+            xticks=x,
+            xticklabels=seq_lens,
+            ylim=(0, max(np.max(sdpa_mems), np.max(jvp_mems)) * 1.25),
+        )
+        ax_mem.legend()
+
+    # --- 3. Finalize and Save Each Figure Individually ---
+    plot_dir = "tests"
+    os.makedirs(plot_dir, exist_ok=True)
+    mask_suffix = "_with_masks" if args.test_masks else ""
+
+    # Finalize and save the performance plot
+    perf_plot_path = os.path.join(plot_dir, f"{args.dtype}_jvp_attention_perf{mask_suffix}.png")
+    fig_perf.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig_perf.savefig(perf_plot_path, dpi=150)
+    if verbose:
+        print(f"Saved performance plot to {perf_plot_path}")
+
+    # Finalize and save the memory plot
+    mem_plot_path = os.path.join(plot_dir, f"{args.dtype}_jvp_attention_mem{mask_suffix}.png")
+    fig_mem.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig_mem.savefig(mem_plot_path, dpi=150)
+    if verbose:
+        print(f"Saved memory plot to {mem_plot_path}")
+
+    # --- 4. Show and Close ---
+    plt.show()
+
+    # Explicitly close figures to free memory
+    plt.close(fig_perf)
+    plt.close(fig_mem)
+
+
 def main(args: Args) -> None:
     """Main benchmarking loop."""
     print("Flash Attention JVP Kernel Benchmark with Mask Testing")
@@ -988,7 +1106,7 @@ def main(args: Args) -> None:
 
     # Seed everything
     random.seed(args.seed)
-    if NUMPY_AVAILABLE:
+    if PLOTTING_AVAILABLE:
         np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -997,6 +1115,7 @@ def main(args: Args) -> None:
 
     # Print summary tables
     print_summary_table(results)
+    plot_benchmark_results(results, args)
 
     # If masks were tested, print comparison table
     if args.test_masks:
