@@ -64,10 +64,19 @@ Contributions or enhancements are welcome!
 
 ## Results
 
+### Time scaling
+
 <div align="center">
 
-<img src="./float32_mem_scaling.jpeg" width="600">
-<img src="./float32_time_scaling.jpeg" width="600">
+<img src="./float32_time_scaling.png" width="600">
+
+</div>
+
+### Memory scaling
+
+<div align="center">
+
+<img src="./float32_mem_scaling.png" width="600">
 
 </div>
 
@@ -81,7 +90,7 @@ python tests/test_jvp_attention.py --dtype {float16,bfloat16,float32}
 
 In principle, the kernel should support ROCm systems as well, though it has not yet been tested on them. macOS is currently unsupported except using a CPU-only backend.
 
-Results for `float16`:
+Full results for `float16`:
 
 ```
 ==============================================================================================================
@@ -209,7 +218,7 @@ Failed configurations:
   - Seq=64, Causal=False, Mask=additive
 ```
 
-Results for `bfloat16`:
+Full results for `bfloat16`:
 
 ```
 ==============================================================================================================
@@ -337,7 +346,7 @@ Failed configurations:
   - Seq=64, Causal=False, Mask=additive
 ```
 
-Results for `float32`:
+Full results for `float32`:
 
 ```
 ==============================================================================================================
@@ -485,7 +494,7 @@ If you use the code associated with this package or otherwise find this work use
   month = sep,
   title = {{JVP Flash Attention}},
   url = {https://github.com/amorehead/jvp_flash_attention},
-  version = {0.0.4},
+  version = {0.0.5},
   year = {2025}
 }
 ```
