@@ -456,7 +456,7 @@ Accuracy: 28/28 tests passed
 
 This project is covered under the **MIT License**.
 
-# Copyright
+## Copyright
 
 JVP Flash Attention Copyright (c) 2025, The Regents of the University of California, through Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the U.S. Dept. of Energy). All rights reserved.
 
