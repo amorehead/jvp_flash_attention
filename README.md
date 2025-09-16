@@ -70,7 +70,7 @@ Contributions or enhancements are welcome!
 
 <div align="center">
 
-<img src="./float32_time_scaling.png" width="600">
+<img src="./float32_time_scaling.png" width="800">
 
 </div>
 
@@ -78,7 +78,7 @@ Contributions or enhancements are welcome!
 
 <div align="center">
 
-<img src="./float32_mem_scaling.png" width="600">
+<img src="./float32_mem_scaling.png" width="800">
 
 </div>
 
