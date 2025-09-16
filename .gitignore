@@ -211,3 +211,4 @@ __marimo__/
 
 # Unit tests
 /tests/*.json
+/tests/*.png

@@ -62,6 +62,15 @@ with sdpa_kernel(SDPBackend.MATH):
 
 Contributions or enhancements are welcome!
 
+## Results
+
+<div align="center">
+
+<img src="./float32_mem_scaling.jpeg" width="600">
+<img src="./float32_time_scaling.jpeg" width="600">
+
+</div>
+
 ## Tests
 
 If you want to run the unit tests verifying the correctness of the JVP Flash Attention Triton kernel, run the following command(s).
