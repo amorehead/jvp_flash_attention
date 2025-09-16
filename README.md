@@ -64,6 +64,8 @@ Contributions or enhancements are welcome!
 
 ## Results
 
+The following results can be reproduced (for `float32` precision) by running `python tests/test_jvp_attention.py --dtype float32`.
+
 ### Time scaling
 
 <div align="center">
