@@ -1,6 +1,6 @@
 [project]
 name = "jvp_flash_attention"
-version = "0.0.5"
+version = "0.0.6"
 description = "Flash Attention Triton kernel with support for second-order derivatives"
 authors = [
     { name = "Alex Morehead", email = "alex.morehead@gmail.edu" }

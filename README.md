@@ -42,22 +42,22 @@ from jvp_flash_attention.jvp_attention import attention as jvp_attention
 
 with sdpa_kernel(SDPBackend.MATH):
   # Regular (quadratic) attention
-  # x = F.scaled_dot_product_attention(
-  #     q,
-  #     k,
-  #     v,
-  #     attn_mask=attn_mask,
-  #     dropout_p=attn_dropout_p if self.training else 0.0,
-  # )
-
-  # JVP flash attention
-  x = jvp_attention(
+  x = F.scaled_dot_product_attention(
       q,
       k,
       v,
       attn_mask=attn_mask,
-      # dropout_p=attn_dropout_p if self.training else 0.0,  # NOTE: Attention dropout is currently unsupported
+      dropout_p=attn_dropout_p if self.training else 0.0,
   )
+
+# JVP flash attention
+x = jvp_attention(
+    q,
+    k,
+    v,
+    attn_mask=attn_mask,
+    # dropout_p=attn_dropout_p if self.training else 0.0,  # NOTE: Attention dropout is currently unsupported
+)
 ```
 
 Contributions or enhancements are welcome!
@@ -496,7 +496,7 @@ If you use the code associated with this package or otherwise find this work use
   month = sep,
   title = {{JVP Flash Attention}},
   url = {https://github.com/amorehead/jvp_flash_attention},
-  version = {0.0.5},
+  version = {0.0.6},
   year = {2025}
 }
 ```
