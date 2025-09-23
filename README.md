@@ -472,6 +472,8 @@ Accuracy: 28/28 tests passed
 ✓ All accuracy checks passed!
 ```
 
+Note: Based on these results, for all precision types, it is recommended to provide a boolean `attn_mask` to `jvp_attention()` where possible.
+
 ## License
 
 This project is covered under the **MIT License**.
