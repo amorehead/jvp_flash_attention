@@ -351,6 +351,12 @@ def _attn_fwd_inner_tma(
     desc_k_t,
     desc_v_t,  #
     offset_y,
+    # Mask and dropout parameters
+    mask_block_ptr,
+    dropout_p,
+    philox_seed,
+    philox_offset_base,
+    # Other parameters
     dtype: tl.constexpr,
     start_m,
     qk_scale,
@@ -364,6 +370,8 @@ def _attn_fwd_inner_tma(
     N_CTX: tl.constexpr,
     warp_specialize: tl.constexpr,
     ENABLE_JVP: tl.constexpr,
+    ENABLE_DROPOUT: tl.constexpr,
+    MASK_TYPE: tl.constexpr,  # 0: no mask, 1: boolean, 2: additive
     MASK_CONST: tl.constexpr = MASK_CONST,
 ):
     """Inner forward pass for attention mechanism with TMA (Tensor Memory Access) support.
@@ -382,6 +390,10 @@ def _attn_fwd_inner_tma(
         desc_k_t: Descriptor for transposed key tensor.
         desc_v_t: Descriptor for transposed value tensor.
         offset_y: Offset for y dimension.
+        mask_block_ptr: Pointer to the attention mask block.
+        dropout_p: Dropout probability.
+        philox_seed: Seed for Philox RNG.
+        philox_offset_base: Base offset for Philox RNG.
         dtype: Data type.
         start_m: Start index for m dimension.
         qk_scale: Scale factor for qk.
@@ -395,6 +407,8 @@ def _attn_fwd_inner_tma(
         N_CTX: Context size.
         warp_specialize: Flag for warp specialization.
         ENABLE_JVP: Flag for enabling JVP.
+        ENABLE_DROPOUT: Flag for enabling dropout.
+        MASK_TYPE: Type of attention mask (0: no mask, 1: boolean, 2: additive).
         MASK_CONST: Constant value used for masking.
 
     Returns:
@@ -402,44 +416,85 @@ def _attn_fwd_inner_tma(
     """
     # Range of values handled by this stage
     if STAGE == 1:
+        # NOTE: From 0 to the left of the diagonal
         lo, hi = 0, start_m * BLOCK_M
     elif STAGE == 2:
+        # NOTE: Used only for the block in which there is transition between non-masked and masked keys
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
         lo = tl.multiple_of(lo, BLOCK_M)
-    # causal = False
     else:
+        # NOTE: Only used for non-causal attention
         lo, hi = 0, N_CTX
+
     offsetk_y = offset_y + lo
     if dtype == tl.float8e5:
         offsetv_y = offset_y * HEAD_DIM + lo
     else:
         offsetv_y = offset_y + lo
+
+    if MASK_TYPE > 0:
+        mask_block_ptr = tl.advance(mask_block_ptr, (0, lo))
+
     # Loop over k, v and update accumulator
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
+        # Let the compiler know that start_n is a multiple
+        # of BLOCK_N, so the compiler can do optimizations
         start_n = tl.multiple_of(start_n, BLOCK_N)
+
         # -- Compute qk ----
         k = desc_k.load([offsetk_y, 0]).T
         qk = tl.dot(q, k)
         if ENABLE_JVP:
             t_k = desc_k_t.load([offsetk_y, 0]).T
             t_qk = tl.dot(t_q, k) + tl.dot(q, t_k)
-        if STAGE == 2:
+
+        # Load and apply attention mask if provided (before scaling for STAGE != 2)
+        if MASK_TYPE > 0:
+            mask = tl.load(mask_block_ptr)
+            if MASK_TYPE == 1:  # Boolean mask
+                # Convert boolean to additive mask: True (attend) -> 0, False (ignore) -> -inf
+                qk = qk + tl.where(mask == 1, 0.0, MASK_CONST)
+                if ENABLE_JVP:
+                    t_qk = tl.where(mask == 1, t_qk, 0.0)
+
+            elif MASK_TYPE == 2:  # Additive mask
+                qk = qk + mask
+
+            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+            qk = qk * qk_scale - m_ij[:, None]
+
+        # For causal attention (STAGE == 2)
+        elif STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * qk_scale + tl.where(mask, 0.0, MASK_CONST)
-            if ENABLE_JVP:
-                # Claude says "tangents should be masked with 0.0 since they represent derivatives".
-                t_qk = tl.where(mask, t_qk, 0.0)
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
+
+        # No masking case (MASK_TYPE == 0 and STAGE != 2)
         else:
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
+
         p = tl.math.exp2(qk)
+
+        if MASK_TYPE == 1 or STAGE == 2:
+            # Account for fully masked sequence blocks
+            p = tl.where(mask == 1, p, 0.0)
+
+        # Apply dropout if enabled
+        if ENABLE_DROPOUT:
+            philox_offset = philox_offset_base + start_m * N_CTX + start_n
+            dropout_mask, dropout_scale = create_dropout_mask(
+                philox_seed, philox_offset, dropout_p, BLOCK_M, BLOCK_N, N_CTX
+            )
+            p = p * dropout_mask.to(dtype) * dropout_scale
+
         # -- Compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
+
         # -- Update output accumulator --
-        if warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+        if warp_specialize and (BLOCK_M == 128 and HEAD_DIM == 128):
             BM: tl.constexpr = acc.shape[0]
             BN: tl.constexpr = acc.shape[1]
             acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
@@ -448,14 +503,18 @@ def _attn_fwd_inner_tma(
             acc = tl.join(acc0, acc1).permute(0, 2, 1).reshape([BM, BN])
         else:
             acc = acc * alpha[:, None]
+
         # Prepare p and v for the dot
         if dtype == tl.float8e5:
             v = desc_v.load([0, offsetv_y]).T
         else:
             v = desc_v.load([offsetv_y, 0])
+
         p = p.to(dtype)
+
         if ENABLE_JVP:
             p_tqk = p * (t_qk * sm_scale)
+
             # NOT: This non-transposed v for FP8 is presumably only supported on Blackwell
             if warp_specialize and (BLOCK_M == 128 and HEAD_DIM == 128):
                 BM: tl.constexpr = g_acc.shape[0]
@@ -466,19 +525,26 @@ def _attn_fwd_inner_tma(
                 g_acc = tl.join(g_acc0, g_acc1).permute(0, 2, 1).reshape([BM, BN])
             else:
                 g_acc = g_acc * alpha[:, None]
+
             g_acc = tl.dot(p_tqk.to(v.dtype), v, g_acc)
             mu_ij = tl.sum(p_tqk, 1)
             mu_i = mu_i * alpha + mu_ij
             t_v = desc_v_t.load([offsetv_y, 0])
             p_tv_acc = p_tv_acc * alpha[:, None] + tl.dot(p, t_v.to(dtype)).to(t_v.dtype)
+
         # NOTE: This non transposed v for FP8 is only supported on Blackwell
         acc = tl.dot(p, v.to(dtype), acc).to(acc.dtype)
+
         # Update m_i and l_i
         # Place this at the end of the loop to reduce register pressure
         l_i = l_i * alpha + l_ij
         m_i = m_ij
         offsetk_y += BLOCK_N
         offsetv_y += BLOCK_N
+
+        if MASK_TYPE > 0:
+            mask_block_ptr = tl.advance(mask_block_ptr, (0, BLOCK_N))
+
     return acc, g_acc, l_i, m_i, mu_i, p_tv_acc
 
 
@@ -1034,6 +1100,13 @@ def _attn_fwd_tma(
     desc_v_t,  #
     desc_o,
     desc_o_t,  #
+    Mask,  # Mask tensor
+    dropout_p,  # Dropout probability
+    philox_seed,  # RNG seed for dropout
+    stride_mz,  # Mask stride
+    stride_mh,  # Mask stride
+    stride_mm,  # Mask stride
+    stride_mn,  # Mask stride
     N_CTX,  #
     HEAD_DIM: tl.constexpr,  #
     BLOCK_M: tl.constexpr,  #
@@ -1042,6 +1115,8 @@ def _attn_fwd_tma(
     STAGE: tl.constexpr,  #
     warp_specialize: tl.constexpr,  #
     ENABLE_JVP: tl.constexpr,  #
+    ENABLE_DROPOUT: tl.constexpr,  #
+    MASK_TYPE: tl.constexpr,  #
 ):
     """Forward attention computation with TMA (Tensor Memory Access) support.
 
@@ -1058,6 +1133,13 @@ def _attn_fwd_tma(
         desc_v_t: Descriptor for the transposed value tensor.
         desc_o: Descriptor for the output tensor.
         desc_o_t: Descriptor for the transposed output tensor.
+        Mask: Attention mask tensor.
+        dropout_p: Dropout probability.
+        philox_seed: Seed for the Philox random number generator.
+        stride_mz: Stride for the mask in the z dimension.
+        stride_mh: Stride for the mask in the h dimension.
+        stride_mm: Stride for the mask in the m dimension.
+        stride_mn: Stride for the mask in the n dimension.
         N_CTX: Context length.
         HEAD_DIM: Dimension of each head.
         BLOCK_M: Block size for the queries.
@@ -1066,6 +1148,8 @@ def _attn_fwd_tma(
         STAGE: Stage of the computation.
         warp_specialize: Flag indicating if warp specialization is used.
         ENABLE_JVP: Flag indicating if JVP (Jacobian-vector product) is enabled.
+        ENABLE_DROPOUT: Flag indicating if dropout is enabled.
+        MASK_TYPE: Type of mask used (0: no mask, 1: boolean, 2: additive).
     """
     tl.static_assert(BLOCK_N <= HEAD_DIM)  # N = KV
 
@@ -1114,6 +1198,23 @@ def _attn_fwd_tma(
 
     offset_y = off_z * (N_CTX * H) + off_h * N_CTX
     qo_offset_y = offset_y + start_m * BLOCK_M
+
+    # Initialize block pointer for the mask, if provided
+    if MASK_TYPE > 0:
+        mask_offset = off_z * stride_mz + off_h * stride_mh
+        mask_block_ptr = tl.make_block_ptr(
+            base=Mask + mask_offset,
+            shape=(N_CTX, N_CTX),
+            strides=(stride_mm, stride_mn),
+            offsets=(start_m * BLOCK_M, 0),
+            block_shape=(BLOCK_M, BLOCK_N),
+            order=(1, 0),
+        )
+    else:
+        mask_block_ptr = None
+
+    # Initialize dropout offset for this block
+    philox_offset_base = off_hz * N_CTX * N_CTX
 
     # Initialize offsets for the query tokens to process
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -1196,6 +1297,10 @@ def _attn_fwd_tma(
             desc_k_t,
             desc_v_t,  #
             offset_y,
+            mask_block_ptr,
+            dropout_p,
+            philox_seed,
+            philox_offset_base,
             dtype,
             start_m,
             qk_scale,
@@ -1209,6 +1314,8 @@ def _attn_fwd_tma(
             N_CTX,  #
             warp_specialize,
             ENABLE_JVP,
+            ENABLE_DROPOUT,
+            MASK_TYPE,
         )
 
     if STAGE == 3:
@@ -1228,6 +1335,10 @@ def _attn_fwd_tma(
             desc_k_t,
             desc_v_t,  #
             offset_y,
+            mask_block_ptr,
+            dropout_p,
+            philox_seed,
+            philox_offset_base,
             dtype,
             start_m,
             qk_scale,
@@ -1241,10 +1352,24 @@ def _attn_fwd_tma(
             N_CTX,  #
             warp_specialize,
             ENABLE_JVP,
+            ENABLE_DROPOUT,
+            MASK_TYPE,
         )
 
     # Epilogue
-    m_i += tl.math.log2(l_i)
+    empty_mask = l_i == 0.0
+    if empty_mask.sum() > 0:
+        l_i = tl.where(
+            empty_mask, 1.0, l_i
+        )  # NOTE: This happens if the entire block is masked out.
+
+    m_i = m_i + tl.where(
+        # NOTE: This is needed to compute the logsumexp for the backward pass.
+        empty_mask,
+        0.0,
+        tl.math.log2(l_i),
+    )
+
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
@@ -2347,20 +2472,15 @@ class JVPAttn(Function):
             return JVPAttn.Grid(triton.cdiv(N_CTX, META["BLOCK_M"]), Z_H, 1)
 
         if USE_TMA and supports_tma():
-            if attn_mask or ENABLE_DROPOUT:
-                raise NotImplementedError(
-                    "TMA kernel currently does not support attention masking or dropout."
-                )
-
             # NOTE: On Hopper, we cannot perform a FP8 dot with a non-transposed second tensor.
             y_dim = Z_H * N_CTX
+            tma_block_shape = [MIN_SEQUENCE_LENGTH, HEAD_DIM_K]
 
-            dummy_block = [MIN_SEQUENCE_LENGTH, MIN_SEQUENCE_LENGTH]
             desc_q = TensorDescriptor(
                 q,
                 shape=[y_dim, HEAD_DIM_K],
                 strides=[HEAD_DIM_K, 1],
-                block_shape=dummy_block,
+                block_shape=tma_block_shape,
             )
             desc_q_t = (
                 desc_q
@@ -2369,16 +2489,19 @@ class JVPAttn(Function):
                     q_t,
                     shape=[y_dim, HEAD_DIM_K],
                     strides=[HEAD_DIM_K, 1],
-                    block_shape=dummy_block,
+                    block_shape=tma_block_shape,
                 )
             )
+
             if q.dtype == torch.float8_e5m2:
                 v_shape = [HEAD_DIM_K, y_dim]
                 v_strides = [N_CTX, 1]
             else:
                 v_shape = [y_dim, HEAD_DIM_K]
                 v_strides = [HEAD_DIM_K, 1]
-            desc_v = TensorDescriptor(v, shape=v_shape, strides=v_strides, block_shape=dummy_block)
+            desc_v = TensorDescriptor(
+                v, shape=v_shape, strides=v_strides, block_shape=tma_block_shape
+            )
             # NOTE: Probably we could share the shape and strides from above, but whatever
             if q_t is not None and q_t.dtype == torch.float8_e5m2:
                 t_v_shape = [HEAD_DIM_K, y_dim]
@@ -2390,14 +2513,15 @@ class JVPAttn(Function):
                 desc_v
                 if v_t is None
                 else TensorDescriptor(
-                    v_t, shape=t_v_shape, strides=t_v_strides, block_shape=dummy_block
+                    v_t, shape=t_v_shape, strides=t_v_strides, block_shape=tma_block_shape
                 )
             )
+
             desc_k = TensorDescriptor(
                 k,
                 shape=[y_dim, HEAD_DIM_K],
                 strides=[HEAD_DIM_K, 1],
-                block_shape=dummy_block,
+                block_shape=tma_block_shape,
             )
             desc_k_t = (
                 desc_k
@@ -2406,14 +2530,15 @@ class JVPAttn(Function):
                     k_t,
                     shape=[y_dim, HEAD_DIM_K],
                     strides=[HEAD_DIM_K, 1],
-                    block_shape=dummy_block,
+                    block_shape=tma_block_shape,
                 )
             )
+
             desc_o = TensorDescriptor(
                 o,
                 shape=[y_dim, HEAD_DIM_K],
                 strides=[HEAD_DIM_K, 1],
-                block_shape=dummy_block,
+                block_shape=tma_block_shape,
             )
             desc_o_t = (
                 desc_o
@@ -2422,7 +2547,7 @@ class JVPAttn(Function):
                     o_t,
                     shape=[y_dim, HEAD_DIM_K],
                     strides=[HEAD_DIM_K, 1],
-                    block_shape=dummy_block,
+                    block_shape=tma_block_shape,
                 )
             )
 
@@ -2439,12 +2564,18 @@ class JVPAttn(Function):
                 desc_v_t,  #
                 desc_o,
                 desc_o_t,  #
+                mask_tensor,  #
+                dropout_p,  #
+                philox_seed,  #
+                *mask_strides,  #
                 N_CTX=N_CTX,  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 FP8_OUTPUT=q.dtype == torch.float8_e5m2,  #
                 STAGE=STAGE,  #
                 warp_specialize=warp_specialize,  #
                 ENABLE_JVP=ENABLE_JVP,  #
+                ENABLE_DROPOUT=ENABLE_DROPOUT,
+                MASK_TYPE=MASK_TYPE,
                 # NOTE: The following are safe (unit-tested) default values
                 BLOCK_M=MIN_SEQUENCE_LENGTH,  #
                 BLOCK_N=MIN_SEQUENCE_LENGTH,  #
