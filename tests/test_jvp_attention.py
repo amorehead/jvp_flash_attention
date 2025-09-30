@@ -1115,7 +1115,10 @@ def main(args: Args) -> None:
 
     # Print summary tables
     print_summary_table(results)
-    plot_benchmark_results(results, args)
+
+    # If performance was benchmarked, plot benchmarking results
+    if args.benchmark_performance:
+        plot_benchmark_results(results, args)
 
     # If masks were tested, print comparison table
     if args.test_masks:
