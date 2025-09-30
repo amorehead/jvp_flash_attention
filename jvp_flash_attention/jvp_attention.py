@@ -2380,7 +2380,7 @@ class JVPAttn(Function):
                 v_strides = [HEAD_DIM_K, 1]
             desc_v = TensorDescriptor(v, shape=v_shape, strides=v_strides, block_shape=dummy_block)
             # NOTE: Probably we could share the shape and strides from above, but whatever
-            if q_t.dtype == torch.float8_e5m2:
+            if q_t is not None and q_t.dtype == torch.float8_e5m2:
                 t_v_shape = [HEAD_DIM_K, y_dim]
                 t_v_strides = [q_t.shape[2], 1]
             else:
