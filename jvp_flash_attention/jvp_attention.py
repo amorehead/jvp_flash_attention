@@ -2355,7 +2355,7 @@ class JVPAttn(Function):
             # NOTE: On Hopper, we cannot perform a FP8 dot with a non-transposed second tensor.
             y_dim = Z_H * N_CTX
 
-            dummy_block = [1, 1]
+            dummy_block = [MIN_SEQUENCE_LENGTH, MIN_SEQUENCE_LENGTH]
             desc_q = TensorDescriptor(
                 q,
                 shape=[y_dim, HEAD_DIM_K],
