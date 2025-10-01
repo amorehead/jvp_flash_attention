@@ -1373,12 +1373,12 @@ def _attn_fwd_tma(
     acc = acc / l_i[:, None]
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
-    desc_o.store([qo_offset_y, 0], acc.to(dtype))
+    desc_o.store([qo_offset_y, 0], acc.to(desc_o.dtype))
 
     if ENABLE_JVP:
         t_p_v = g_acc / l_i[:, None] - (mu_i / l_i)[:, None] * acc
         t_y_out = t_p_v + p_tv_acc / l_i[:, None]
-        desc_o_t.store([qo_offset_y, 0], t_y_out.to(dtype))
+        desc_o_t.store([qo_offset_y, 0], t_y_out.to(desc_o_t.dtype))
 
 
 @triton.jit
