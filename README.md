@@ -38,7 +38,7 @@ Once installed, one can use `jvp_flash_attention` in place of PyTorch's `scaled_
 import torch.nn.functional as F
 
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from jvp_flash_attention.jvp_attention import attention as jvp_attention
+from jvp_flash_attention.jvp_attention import JVPAttn, attention as jvp_attention
 
 with sdpa_kernel(SDPBackend.MATH):
   # Regular (quadratic) attention
@@ -59,6 +59,10 @@ x = jvp_attention(
     # dropout_p=attn_dropout_p if self.training else 0.0,  # NOTE: Attention dropout is currently unsupported
 )
 ```
+
+> Note: If calling `torch.func.jvp` manually in your model's forward pass like
+> `pred, df = torch.func.jvp(*(lambda x_jvp: model(x_jvp), (x,), (gt,)))`,
+> make sure to use JVP Flash Attention in your model as `model = lambda q, k, v: JVPAttn.fwd_dual(q, k, v)` instead of as `model = lambda q, k, v: jvp_attention(q, k, v)` to ensure each input's tangent vectors are computed [prior](https://github.com/amorehead/jvp_flash_attention/issues/10) to running PyTorch's `autograd` engine. Models that rely on `torch.autograd.grad` to compute higher-order derivatives in their forward pass (e.g., energy-based models) should not require this change.
 
 Contributions or enhancements are welcome!
 
@@ -498,7 +502,7 @@ If you use the code associated with this package or otherwise find this work use
   month = sep,
   title = {{JVP Flash Attention}},
   url = {https://github.com/amorehead/jvp_flash_attention},
-  version = {0.0.8},
+  version = {0.0.9},
   year = {2025}
 }
 ```
