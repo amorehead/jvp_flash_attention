@@ -2761,8 +2761,10 @@ class JVPAttn(Function):
     ) -> Tensor:
         """Forward pass for JVP Attention with dual tensor inputs.
 
-        This is not an autograd convention. It's a workaround for invoking
-        JVPAttn::forward with the right arguments when you have a dual tensor input.
+        NOTE: This is not an autograd convention. It's a workaround to get type-hinting and kwarg support.
+
+        NOTE: Calls to `contiguous()` are necessary to ensure the inputs are contiguous in memory
+        (e.g., due to an `unbind` call to create `q`, `k`, `v`) but nonetheless may incur a performance cost.
 
         Args:
             q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
@@ -2778,6 +2780,9 @@ class JVPAttn(Function):
         Returns:
             The output tensor.
         """
+        if not (q.is_contiguous() and k.is_contiguous() and v.is_contiguous()):
+            q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+
         q_p, q_t = fwAD.unpack_dual(q)
         k_p, k_t = fwAD.unpack_dual(k)
         v_p, v_t = fwAD.unpack_dual(v)
