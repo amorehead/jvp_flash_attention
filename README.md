@@ -72,7 +72,11 @@ Contributions or enhancements are welcome!
 
 ### Loss matching
 
-<img width="1369" height="704" alt="image" src="https://github.com/user-attachments/assets/511e89d2-b685-4902-8a31-93e0cb892cb7" />
+<img width="1369" height="704" alt="image" src="https://github.com/user-attachments/assets/70df8ddc-e558-4eb7-a4ba-0464dabb1b40" />
+
+### Speed matching
+
+<img width="1369" height="704" alt="image" src="https://github.com/user-attachments/assets/6b52cb5d-ed0f-447f-9488-6f3057a99cc7" />
 
 > Note: The following results can be reproduced (for `float32` precision) by running `python tests/test_jvp_attention.py --dtype float32`.
 
