@@ -70,6 +70,10 @@ Contributions or enhancements are welcome!
 
 ## Results
 
+### Loss matching
+
+<img width="1369" height="704" alt="image" src="https://github.com/user-attachments/assets/511e89d2-b685-4902-8a31-93e0cb892cb7" />
+
 > Note: The following results can be reproduced (for `float32` precision) by running `python tests/test_jvp_attention.py --dtype float32`.
 
 ### Time scaling
