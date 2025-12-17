@@ -60,7 +60,7 @@ x = jvp_attention(
 )
 ```
 
-Anecdotally, one can swap out `F.scaled_dot_product_attention` with `jvp_attention` **even for pretrained models** with minimal impact on numerical accuracy.
+Anecdotally, one can also swap out `F.scaled_dot_product_attention` with `jvp_attention` **even for pretrained models** with minimal impact on numerical accuracy.
 
 > Note: If calling `torch.func.jvp` manually in your model's forward pass like
 > `pred, df = torch.func.jvp(*(lambda x_jvp: model(x_jvp), (x,), (gt,)))`,
