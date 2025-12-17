@@ -72,15 +72,21 @@ Contributions or enhancements are welcome!
 
 ### Loss matching
 
+Model training with either `F.scaled_dot_product_attention` or `JVPAttn.fwd_dual` produces the same loss trajectory.
+
 <img width="1369" height="704" alt="image" src="https://github.com/user-attachments/assets/70df8ddc-e558-4eb7-a4ba-0464dabb1b40" />
 
 ### Speed matching
+
+Model training with either `F.scaled_dot_product_attention` or `JVPAttn.fwd_dual` achieves the same iteration speed.
 
 <img width="1369" height="704" alt="image" src="https://github.com/user-attachments/assets/6b52cb5d-ed0f-447f-9488-6f3057a99cc7" />
 
 > Note: The following results can be reproduced (for `float32` precision) by running `python tests/test_jvp_attention.py --dtype float32`.
 
 ### Time scaling
+
+`jvp_attention` outscales the speed of (`SDPBackend.MATH`-based) `F.scaled_dot_product_attention` when calculating second-order derivatives.
 
 <div align="center">
 
@@ -89,6 +95,8 @@ Contributions or enhancements are welcome!
 </div>
 
 ### Memory scaling
+
+`jvp_attention` improves the memory usage of (`SDPBackend.MATH`-based) `F.scaled_dot_product_attention` when calculating second-order derivatives.
 
 <div align="center">
 
