@@ -2372,6 +2372,10 @@ class JVPAttn(Function):
             "JVP attention only supports HEAD_DIM_K in {16, 32, 64, 128, 256},"
             f" but got HEAD_DIM_K={HEAD_DIM_K}",
         )
+        assert N_CTX % 2 == 0 and N_CTX >= 32, (
+            "JVP attention requires N_CTX to be a multiple of 2 and >= 32,"
+            f" but got N_CTX={N_CTX}",
+        )
 
         if causal and attn_mask is not None:
             raise ValueError("Causal attention does not support an attention mask.")
