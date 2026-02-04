@@ -2843,6 +2843,17 @@ class JVPAttn(Function):
         """
         q, k, v, o, M = ctx.saved_tensors
 
+        def unwrap(x):
+            """Unwrap a functorch tensor if it is wrapped."""
+            if (
+                isinstance(x, torch.Tensor)
+                and hasattr(torch, "_C")
+                and hasattr(torch._C, "_functorch")
+                and torch._C._functorch.is_functorch_wrapped_tensor(x)
+            ):
+                return torch._C._functorch.get_unwrapped(x)
+            return x
+
         # Ensure inputs/outputs the kernel reads share the same (contiguous) layout
         if not (
             q.is_contiguous() and k.is_contiguous() and v.is_contiguous() and o.is_contiguous()
@@ -2908,7 +2919,7 @@ class JVPAttn(Function):
         # Preprocess output's deltas
         pre_grid = (N_CTX // BLOCK_MIN, Z_H)
         _attn_bwd_preprocess[pre_grid](
-            o,
+            unwrap(o),
             do,  #
             delta,  #
             N_CTX,  #
@@ -2926,15 +2937,15 @@ class JVPAttn(Function):
         )
 
         bwd_kernel[grid](
-            q,
+            unwrap(q),
             arg_k,
-            v,
+            unwrap(v),
             ctx.sm_scale,
             do,
             dq,
             dk,
             dv,  #
-            M,
+            unwrap(M),
             delta,  #
             q.stride(0),
             q.stride(1),
@@ -2952,7 +2963,7 @@ class JVPAttn(Function):
             BLOCK_N2=BLOCK_N2,  #
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM_K,  #
-            mask_ptr=ctx.mask_tensor,
+            mask_ptr=unwrap(ctx.mask_tensor),
             MASK_TYPE=ctx.MASK_TYPE,
             dropout_p=ctx.dropout_p,
             philox_seed=ctx.philox_seed,
