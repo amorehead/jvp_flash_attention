@@ -188,6 +188,26 @@ def test_fwd_dual_with_plain_inputs() -> None:
     )
 
 
+@pytest.mark.parametrize("use_naive", [True, False])
+@pytest.mark.parametrize("active_tangent", ["q", "k", "v"])
+def test_partial_dual_inputs(use_naive: bool, active_tangent: str) -> None:
+    """`fwd_dual` supports dual tensors where only a subset of (q, k, v) has tangents."""
+    if not use_naive and not (HAS_TRITON and torch.cuda.is_available()):
+        pytest.skip("requires Triton on a CUDA device")
+
+    q_p, k_p, v_p, q_t, k_t, v_t, _ = make_qkv_tangents_target(torch.float32)
+    with fwAD.dual_level():
+        q = fwAD.make_dual(q_p, q_t) if active_tangent == "q" else q_p
+        k = fwAD.make_dual(k_p, k_t) if active_tangent == "k" else k_p
+        v = fwAD.make_dual(v_p, v_t) if active_tangent == "v" else v_p
+
+        out = JVPAttn.fwd_dual(q, k, v, USE_NAIVE=use_naive)
+        o_p, o_t = fwAD.unpack_dual(out)
+        assert o_t is not None
+        assert not torch.isnan(o_p).any()
+        assert not torch.isnan(o_t).any()
+
+
 def test_apply_interface() -> None:
     """`JVPAttn.apply` returns the kernel's (output, context) structure."""
 
@@ -300,7 +320,7 @@ def test_arbitrary_seq_lens(
     assert_close_metrics((dq, dk, dv), expected[2:5], dtype)
 
 
-def test_cpu_dispatch() -> None:
+def test_cpu_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     """CPU (and Triton-less) execution dispatches to the naive implementation, with overrides."""
 
     assert use_naive_attention(torch.device("cpu"))
@@ -336,6 +356,9 @@ def test_cpu_dispatch() -> None:
             )
             o_p, _ = fwAD.unpack_dual(out_t)
         torch.testing.assert_close(out, o_p, atol=1e-6, rtol=1e-6)
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert use_naive_attention(torch.device("cuda"))
 
 
 def test_unsupported_options() -> None:
@@ -457,12 +480,86 @@ def test_sequential_matches_parallel(dtype: torch.dtype, use_naive: bool) -> Non
 
     seq_p = torch.cat(seq_p, dim=-2)
     seq_t = torch.cat(seq_t, dim=-2)
-    torch.testing.assert_close(seq_p, parallel_p, atol=ATOL[dtype], rtol=RTOL)
-    # NOTE: The JVP tangent accumulates extra rounding in bf16 tensor cores along
-    # the padded pathway, so it is compared with a looser tolerance.
+    # NOTE: Rectangular Q/KV routes sequential steps to the tiled fallback, so
+    # use_naive=False compares it against the Triton parallel path; bf16 then
+    # differs by a few ulps. The same applies to the accumulated JVP tangent.
+    atol = 5e-2 if dtype is torch.bfloat16 and not use_naive else ATOL[dtype]
+    torch.testing.assert_close(seq_p, parallel_p, atol=atol, rtol=RTOL)
     torch.testing.assert_close(
         seq_t, parallel_t, atol=5e-2 if dtype is torch.bfloat16 else ATOL[dtype], rtol=RTOL
     )
+
+
+@pytest.mark.skipif(
+    not (HAS_TRITON and torch.cuda.is_available()), reason="requires Triton on a CUDA device"
+)
+def test_additive_mask_padding_is_exact() -> None:
+    """Padded keys contribute nothing to additive-mask attention or its gradients."""
+
+    n, d = 2, 128
+    q = torch.zeros(1, 1, n, d, device=DEVICE)
+    k = torch.zeros_like(q)
+    v = torch.ones_like(q).requires_grad_()
+    mask = torch.zeros(1, 1, n, n, device=DEVICE)
+    mask[..., -1] = MASK_CONST
+
+    out = JVPAttn.fwd(q, k, v, attn_mask=mask, USE_NAIVE=False)
+    out.sum().backward()
+
+    torch.testing.assert_close(out, torch.ones_like(out), atol=1e-6, rtol=0)
+    torch.testing.assert_close(
+        v.grad[..., 0, :], torch.full_like(v.grad[..., 0, :], n), atol=1e-3, rtol=0
+    )
+    torch.testing.assert_close(
+        v.grad[..., 1, :], torch.zeros_like(v.grad[..., 1, :]), atol=1e-6, rtol=0
+    )
+
+
+def test_causal_fallback_matches_sdpa_with_second_order() -> None:
+    """Causal masking is exact and the fallback's second derivatives match SDPA."""
+
+    n, d = 32, 16
+    q = rand(1, 1, n, d, seed=0) * 0.5
+    k = rand(1, 1, n, d, seed=1) * 0.5
+    v = rand(1, 1, n, d, seed=2)
+    target = rand(1, 1, n, d, seed=3)
+    q[0, 0, 0, 0] = 25.0
+    k[0, 0, 1, 0] = 25.0  # a future logit that exceeds MASK_CONST
+
+    def run(attn):
+        q_, k_, v_ = (t.clone().requires_grad_() for t in (q, k, v))
+        out = attn(q_, k_, v_)
+        grads = torch.autograd.grad((out * target).sum(), (q_, k_, v_), create_graph=True)
+        hess = torch.autograd.grad(sum(g.sum() for g in grads), (q_, k_, v_))
+        return tuple(t.detach() for t in (out, *grads, *hess))
+
+    with sdpa_kernel(SDPBackend.MATH):
+        expected = run(lambda q, k, v: scaled_dot_product_attention(q, k, v, is_causal=True))
+
+    actual = run(lambda q, k, v: JVPAttn.fwd(q, k, v, causal=True, USE_NAIVE=True))
+    assert_close_metrics(actual, expected, torch.float32)
+
+
+@pytest.mark.skipif(
+    not (HAS_TRITON and torch.cuda.is_available()), reason="requires Triton on a CUDA device"
+)
+def test_cached_decoding_uses_rectangular_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cached decoding keeps rectangular Q/KV instead of building a square mask."""
+
+    def fail(*args, **kwargs):
+        raise AssertionError("padded square mask should not be built")
+
+    monkeypatch.setattr("jvp_flash_attention.jvp_attention.build_internal_mask", fail)
+
+    q = rand(1, 1, 1, 16)
+    k = rand(1, 1, 129, 16)
+    v = rand(1, 1, 129, 16)
+    out = JVPAttn.fwd(q, k, v, USE_NAIVE=False)
+
+    with sdpa_kernel(SDPBackend.MATH):
+        expected = scaled_dot_product_attention(q, k, v)
+
+    torch.testing.assert_close(out, expected, atol=ATOL[torch.float32], rtol=RTOL)
 
 
 @pytest.mark.skipif(

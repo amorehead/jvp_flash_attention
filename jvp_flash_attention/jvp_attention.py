@@ -118,8 +118,9 @@ def use_naive_attention(
         device = device.device
     device = torch.device(device)
 
+    triton_available = HAS_TRITON and device.type == "cuda" and torch.cuda.is_available()
     if exists(USE_NAIVE):
-        assert USE_NAIVE or (HAS_TRITON and device.type == "cuda" and torch.cuda.is_available()), (
+        assert USE_NAIVE or triton_available, (
             "Cannot force the Triton backend (USE_NAIVE=False) because "
             f"Triton is {'installed' if HAS_TRITON else 'not installed'}, "
             f"CUDA is {'available' if torch.cuda.is_available() else 'unavailable'}, and the "
@@ -127,7 +128,7 @@ def use_naive_attention(
         )
         return USE_NAIVE
 
-    return not HAS_TRITON or device.type != "cuda"
+    return not triton_available
 
 
 def is_hip():
@@ -226,8 +227,12 @@ def pad_attn_mask(mask_tensor: Tensor, mask_type: int, length: int) -> Tensor:
     pad = length - mask_tensor.shape[-1]
     if pad <= 0:
         return mask_tensor
-    value: bool | float = False if mask_type == 1 else MASK_CONST
-    return F.pad(mask_tensor, (0, pad, 0, pad), value=value)
+    if mask_type == 1:
+        return F.pad(mask_tensor, (0, pad, 0, pad), value=False)
+    # NOTE: Additive masks need -inf in padded columns so they contribute exactly
+    # nothing to the softmax; padded query rows use 0 to remain numerically safe.
+    mask_tensor = F.pad(mask_tensor, (0, pad, 0, 0), value=float("-inf"))
+    return F.pad(mask_tensor, (0, 0, 0, pad), value=0.0)
 
 
 def excise_padding(t: Tensor, n: int, pad_mode: str | None) -> Tensor:
@@ -1666,8 +1671,8 @@ def _attn_bwd_dkdv(
             if MASK_TYPE == 1:  # Boolean mask
                 pT = tl.where(mask == 1, pT, 0.0)
             elif MASK_TYPE == 2:  # Additive mask
-                # 'mask' is the additive mask loaded above (MASK_CONST not allowed, all other values allowed)
-                attend = mask != MASK_CONST
+                # NOTE: Padded columns use -inf, so they are excluded exactly.
+                attend = (mask != MASK_CONST) & (mask > -float("inf"))
                 pT = tl.where(attend, pT, 0.0)
 
         # (or) Causal masking after exponentiation
@@ -1817,7 +1822,8 @@ def _attn_bwd_dq(
             if MASK_TYPE == 1:  # Boolean mask
                 p = tl.where(mask == 1, p, 0.0)
             elif MASK_TYPE == 2:  # Additive mask
-                attend = mask != MASK_CONST
+                # NOTE: Padded columns use -inf, so they are excluded exactly.
+                attend = (mask != MASK_CONST) & (mask > -float("inf"))
                 p = tl.where(attend, p, 0.0)
 
         # (or) Causal masking after exponentiation
@@ -2692,7 +2698,8 @@ class JVPAttn(Function):
             USE_TMA: Whether to use TMA.
             verify_attn_mask: Whether to verify the correctness of the provided attention mask.
             USE_NAIVE: Whether to force the pure-PyTorch (True) or Triton (False)
-                implementation, or to choose automatically (None).
+                implementation, or to choose automatically (None). Rectangular
+                queries/keys (n_q != n_kv) always use the pure-PyTorch fallback.
             min_sequence_length: The block size (and minimum sequence length) used
                 by the Triton kernels; shorter or non-multiple sequence lengths
                 are padded internally.
@@ -2739,6 +2746,11 @@ class JVPAttn(Function):
 
         # pure pytorch fallback (no triton / cuda); handles any sequence length natively
         mask_tensor, MASK_TYPE = prepare_attn_mask(attn_mask, q, verify_attn_mask)
+        # NOTE: Padding cached queries up to the KV length would make decoding
+        # quadratic; the tiled path keeps rectangular Q/KV lengths instead.
+        if n_q != n_kv:
+            USE_NAIVE = True
+
         if use_naive_attention(q, USE_NAIVE):
             o, o_t, M = tiled_attention(
                 q,
@@ -3084,7 +3096,8 @@ class JVPAttn(Function):
             pad_mode,
         ) = outputs
 
-        ctx.use_naive = use_naive_attention(q, USE_NAIVE)
+        # Pure-PyTorch tiled execution returns grid=None; Triton returns the launch grid.
+        ctx.use_naive = grid is None
         ctx.grid = grid
         ctx.save_for_forward(o_t)
         ctx.save_for_backward(q, k, v, o, M)
@@ -3137,7 +3150,9 @@ class JVPAttn(Function):
             warp_specialize: Whether to use warp specialization.
             USE_TMA: Whether to use TMA.
             verify_attn_mask: Whether to verify the correctness of the provided attention mask.
-            USE_NAIVE: Whether to force the pure-PyTorch (True) or Triton (False) implementation, or to choose automatically (None).
+            USE_NAIVE: Whether to force the pure-PyTorch (True) or Triton (False)
+                implementation, or to choose automatically (None). Rectangular queries/keys
+                (n_q != n_kv) always use the pure-PyTorch fallback.
             min_sequence_length: The block size (and minimum sequence length) used
                 by the Triton kernels; shorter or non-multiple sequence lengths
                 are padded internally.
@@ -3202,7 +3217,9 @@ class JVPAttn(Function):
             warp_specialize: Whether to use warp specialization.
             USE_TMA: Whether to use TMA.
             verify_attn_mask: Whether to verify the correctness of the provided attention mask.
-            USE_NAIVE: Whether to force the pure-PyTorch (True) or Triton (False) implementation, or to choose automatically (None).
+            USE_NAIVE: Whether to force the pure-PyTorch (True) or Triton (False)
+                implementation, or to choose automatically (None). Rectangular queries/keys
+                (n_q != n_kv) always use the pure-PyTorch fallback.
             min_sequence_length: The block size (and minimum sequence length) used
                 by the Triton kernels; shorter or non-multiple sequence lengths
                 are padded internally.
@@ -3217,7 +3234,13 @@ class JVPAttn(Function):
         k_p, k_t = fwAD.unpack_dual(k)
         v_p, v_t = fwAD.unpack_dual(v)
 
-        if _is_compiling() and q_t is not None and k_t is not None and v_t is not None:
+        has_tangents = q_t is not None or k_t is not None or v_t is not None
+        if has_tangents:
+            q_t = torch.zeros_like(q_p) if q_t is None else q_t.contiguous()
+            k_t = torch.zeros_like(k_p) if k_t is None else k_t.contiguous()
+            v_t = torch.zeros_like(v_p) if v_t is None else v_t.contiguous()
+
+        if _is_compiling() and has_tangents:
             o, ctx_contrib = JVPAttn.forward(
                 q_p,
                 k_p,
@@ -3311,6 +3334,13 @@ class JVPAttn(Function):
 
         # pure pytorch backward (no triton / cuda)
         if ctx.use_naive:
+            if torch.is_grad_enabled():
+                # NOTE: Recompute the forward pass with a graph so that double
+                # backward sees the derivatives of the output and normalizer.
+                o, _, M = tiled_attention(
+                    q, k, v, ctx.mask_tensor, ctx.MASK_TYPE, ctx.causal, ctx.sm_scale
+                )
+
             dq, dk, dv = tiled_attention_backward(
                 q,
                 k,
