@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable, NamedTuple
 
+import numpy as np
 import torch
 import torch.autograd.forward_ad as fwAD
 from torch import Tensor, enable_grad
@@ -18,7 +19,6 @@ from torch.nn.functional import scaled_dot_product_attention
 
 try:
     import matplotlib.pyplot as plt
-    import numpy as np
 
     PLOTTING_AVAILABLE = True
 except ImportError:
@@ -746,7 +746,9 @@ def run_benchmark_suite(args: Args) -> list[BenchmarkResult]:
                     if accuracy_metrics.is_accurate():
                         print("  ✓ All accuracy checks passed!")
                     else:
-                        print(f"  ⚠️  Max error {accuracy_metrics.max_error:.2e} exceeds tolerance")
+                        print(
+                            f"  ⚠️  Max error {accuracy_metrics.max_error:.2e} exceeds tolerance"
+                        )
                 else:
                     accuracy_metrics = None
 
