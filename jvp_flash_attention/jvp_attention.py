@@ -239,7 +239,7 @@ def excise_padding(t: Tensor, n: int, pad_mode: str | None) -> Tensor:
     """-> (..., n, head_dim), dropping the padded rows from `t`."""
     if pad_mode is None:
         return t
-    return t[..., -n:, :] if pad_mode == "left" else t[..., :n, :]
+    return (t[..., -n:, :] if pad_mode == "left" else t[..., :n, :]).contiguous()
 
 
 @triton.jit
@@ -466,11 +466,11 @@ def _attn_fwd_inner(
             mu_ij = tl.sum(p_tqk, 1)
             mu_i = mu_i * alpha + mu_ij
             t_v = tl.load(T_V_block_ptr)
-            p_tv_acc = p_tv_acc * alpha[:, None] + tl.dot(p.to(t_v.dtype), t_v).to(t_v.dtype)
+            p_tv_acc = p_tv_acc * alpha[:, None] + tl.dot(p, t_v.to(dtype)).to(t_v.dtype)
             T_V_block_ptr = tl.advance(T_V_block_ptr, (BLOCK_N, 0))
             T_K_block_ptr = tl.advance(T_K_block_ptr, (0, BLOCK_N))
 
-        acc = tl.dot(p.to(v.dtype), v, acc).to(acc.dtype)
+        acc = tl.dot(p, v.to(dtype), acc).to(acc.dtype)
 
         # -- Update m_i --
         m_i = m_ij
@@ -681,10 +681,10 @@ def _attn_fwd_inner_tma(
             mu_ij = tl.sum(p_tqk, 1)
             mu_i = mu_i * alpha + mu_ij
             t_v = desc_v_t.load([offsetv_y, 0])
-            p_tv_acc = p_tv_acc * alpha[:, None] + tl.dot(p.to(t_v.dtype), t_v).to(t_v.dtype)
+            p_tv_acc = p_tv_acc * alpha[:, None] + tl.dot(p, t_v.to(dtype)).to(t_v.dtype)
 
         # NOTE: This non transposed v for FP8 is only supported on Blackwell
-        acc = tl.dot(p.to(v.dtype), v, acc).to(acc.dtype)
+        acc = tl.dot(p, v.to(dtype), acc).to(acc.dtype)
 
         # Update m_i and l_i
         # Place this at the end of the loop to reduce register pressure
@@ -1648,10 +1648,7 @@ def _attn_bwd_dkdv(
     tl.static_assert(BLOCK_N1 % BLOCK_M1 == 0)
     curr_m = start_m
     step_m = BLOCK_M1
-    # Compute fp8 gradients in fp32; other dtypes keep their tensor cores
-    dot_dtype: tl.constexpr = (
-        tl.float32 if do_ptrs.dtype.element_ty == tl.float8e5 else do_ptrs.dtype.element_ty
-    )
+    dtype = tl.float32  # For dot products
 
     # Iteratively compute dK and dV over the M dimension
     for _ in range(num_steps):
@@ -1690,8 +1687,9 @@ def _attn_bwd_dkdv(
 
         # Compute dV
         ppT = pT
+        ppT = ppT.to(dtype)
         do = tl.load(do_ptrs)
-        dv += tl.dot(ppT.to(dot_dtype), do.to(dot_dtype)).to(do.dtype)
+        dv += tl.dot(ppT, do.to(dtype)).to(do.dtype)
         # NOTE: D (= delta) is pre-divided by ds_scale.
         Di = tl.load(D + offs_m)
 
@@ -1702,7 +1700,8 @@ def _attn_bwd_dkdv(
             dpT = dpT * dropout_mask.to(dpT.dtype) * dropout_scale
 
         dsT = pT * (dpT - Di[None, :])
-        dk += tl.dot(dsT.to(dot_dtype), tl.trans(qT).to(dot_dtype)).to(qT.dtype)
+        dsT = dsT.to(dtype)
+        dk += tl.dot(dsT, tl.trans(qT).to(dtype)).to(qT.dtype)
 
         # Increment pointers
         curr_m += step_m
@@ -1801,10 +1800,7 @@ def _attn_bwd_dq(
     tl.static_assert(BLOCK_M2 % BLOCK_N2 == 0)
     curr_n = start_n
     step_n = BLOCK_N2
-    # Compute fp8 gradients in fp32; other dtypes keep their tensor cores
-    dot_dtype: tl.constexpr = (
-        tl.float32 if kT_ptrs.dtype.element_ty == tl.float8e5 else kT_ptrs.dtype.element_ty
-    )
+    dtype = tl.float32  # For dot products
 
     # Iteratively compute dQ over the N dimension
     for _ in range(num_steps):
@@ -1849,7 +1845,8 @@ def _attn_bwd_dq(
 
         # Compute dQ
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
-        dq += tl.dot(ds.to(dot_dtype), tl.trans(kT).to(dot_dtype)).to(kT.dtype)
+        ds = ds.to(dtype)
+        dq += tl.dot(ds, tl.trans(kT).to(dtype)).to(kT.dtype)
 
         # Increment pointers
         curr_n += step_n
@@ -2595,7 +2592,11 @@ class JVPAttn(Function):
         dropout_p: float
         philox_seed: int
         ENABLE_DROPOUT: bool
+        use_naive: bool
         min_sequence_length: int
+        n_q: int
+        n_kv: int
+        pad_mode: str | None
 
     class FwdOutCtxContrib(NamedTuple):
         """Forward output context contributions for JVP Attention."""
@@ -2658,9 +2659,9 @@ class JVPAttn(Function):
         q: Tensor,
         k: Tensor,
         v: Tensor,
-        q_t: Tensor | None,
-        k_t: Tensor | None,
-        v_t: Tensor | None,
+        q_t: Tensor | None = None,
+        k_t: Tensor | None = None,
+        v_t: Tensor | None = None,
         attn_mask: Tensor | None = None,
         dropout_p: float = 0.0,
         causal: bool = False,
@@ -2718,7 +2719,7 @@ class JVPAttn(Function):
         HEAD_DIM_V = v.shape[-1]  # NOTE: When v is in float8_e5m2 it is transposed.
 
         STAGE = 3 if causal else 1
-        ENABLE_JVP = q_t is not None
+        ENABLE_JVP = q_t is not None or k_t is not None or v_t is not None
 
         assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V, (
             "JVP attention requires HEAD_DIM_Q == HEAD_DIM_K == HEAD_DIM_V"
@@ -2767,7 +2768,7 @@ class JVPAttn(Function):
 
             return (  # was JVPAttn.FwdOut
                 o,
-                JVPAttn.FwdOutCtxContrib(  # was JVPAttn.FwdOutCtxContrib
+                (  # was JVPAttn.FwdOutCtxContrib
                     o_t,
                     M,
                     None,
@@ -2783,6 +2784,14 @@ class JVPAttn(Function):
                     None,
                 ),
             )
+
+        if not (q.is_contiguous() and k.is_contiguous() and v.is_contiguous()):
+            q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+
+        if ENABLE_JVP:
+            q_t = torch.zeros_like(q) if q_t is None else q_t.contiguous()
+            k_t = torch.zeros_like(k) if k_t is None else k_t.contiguous()
+            v_t = torch.zeros_like(v) if v_t is None else v_t.contiguous()
 
         # NOTE: The Triton kernels require the sequence length to be at least
         # min_sequence_length and a multiple of it; short (or mismatched) sequences are
@@ -2828,7 +2837,7 @@ class JVPAttn(Function):
                 # NOTE: For backward pass with HEAD_DIM_K=128, this is probably too low for H100; register allocation fails.
                 extra_kern_args["maxnreg"] = 80
 
-        if hasattr(triton, "set_allocator") and is_cuda():
+        if hasattr(triton, "set_allocator") and is_cuda() and not _is_compiling():
 
             def alloc_fn(size: int, align: int, _):
                 """Custom allocator function for Triton."""
@@ -3034,9 +3043,15 @@ class JVPAttn(Function):
                 **extra_kern_args,
             )
 
+        if pad_mode is not None:
+            o = excise_padding(o, n_q, pad_mode)
+            if o_t is not None:
+                o_t = excise_padding(o_t, n_q, pad_mode)
+            M = (M[..., -n_q:] if pad_mode == "left" else M[..., :n_q]).contiguous()
+
         return (  # was JVPAttn.FwdOut
             o,
-            JVPAttn.FwdOutCtxContrib(  # was JVPAttn.FwdOutCtxContrib
+            (  # was JVPAttn.FwdOutCtxContrib
                 o_t,
                 M,
                 grid,
@@ -3098,6 +3113,10 @@ class JVPAttn(Function):
 
         # Pure-PyTorch tiled execution returns grid=None; Triton returns the launch grid.
         ctx.use_naive = grid is None
+        if not ctx.use_naive and not (
+            q.is_contiguous() and k.is_contiguous() and v.is_contiguous()
+        ):
+            q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         ctx.grid = grid
         ctx.save_for_forward(o_t)
         ctx.save_for_backward(q, k, v, o, M)
@@ -3181,8 +3200,8 @@ class JVPAttn(Function):
             min_sequence_length,
         )
 
-        a, ctx_contrib = out
-        return excise_padding(a, ctx_contrib.n_q, ctx_contrib.pad_mode)
+        a, _ = out
+        return a
 
     @staticmethod
     def fwd_dual(
@@ -3235,11 +3254,6 @@ class JVPAttn(Function):
         v_p, v_t = fwAD.unpack_dual(v)
 
         has_tangents = q_t is not None or k_t is not None or v_t is not None
-        if has_tangents:
-            q_t = torch.zeros_like(q_p) if q_t is None else q_t.contiguous()
-            k_t = torch.zeros_like(k_p) if k_t is None else k_t.contiguous()
-            v_t = torch.zeros_like(v_p) if v_t is None else v_t.contiguous()
-
         if _is_compiling() and has_tangents:
             o, ctx_contrib = JVPAttn.forward(
                 q_p,
@@ -3258,13 +3272,7 @@ class JVPAttn(Function):
                 USE_NAIVE,
                 min_sequence_length,
             )
-            o = excise_padding(o, ctx_contrib.n_q, ctx_contrib.pad_mode)
-            o_t = (
-                None
-                if ctx_contrib.o_t is None
-                else excise_padding(ctx_contrib.o_t, ctx_contrib.n_q, ctx_contrib.pad_mode)
-            )
-            return fwAD.make_dual(o, o_t)
+            return fwAD.make_dual(o, ctx_contrib[0])
 
         # NOTE: We pass some dualtensor args to ensure jvp() will be called,
         # but we also pass tangents separately, as forward() demotes dual
@@ -3287,8 +3295,8 @@ class JVPAttn(Function):
             min_sequence_length,
         )
 
-        a, ctx_contrib = out
-        return excise_padding(a, ctx_contrib.n_q, ctx_contrib.pad_mode)
+        a, _ = out
+        return a
 
     @staticmethod
     def jvp(ctx: JVPAttn.FnCtx, gq: Tensor, gk: Tensor, gv: Tensor, *_) -> JVPAttn.JVPOut:
@@ -3375,12 +3383,15 @@ class JVPAttn(Function):
         # NOTE: For padded pathways, restore the padded layout the kernels expect.
         if ctx.pad_mode is not None:
             left = ctx.pad_mode == "left"
-            length = M.shape[-1]
+            length = min_padded_length(max(ctx.n_q, ctx.n_kv), ctx.min_sequence_length)
+            pad_m = length - M.shape[-1]
             q = pad_to_length(unwrap(q), length, left=left)
             k = pad_to_length(unwrap(k), length, left=left)
             v = pad_to_length(unwrap(v), length, left=left)
             o = pad_to_length(unwrap(o), length, left=left)
             do = pad_to_length(unwrap(do), length, left=left)
+            if pad_m > 0:
+                M = F.pad(unwrap(M), (pad_m, 0) if left else (0, pad_m), value=0.0)
 
         # Ensure inputs/outputs the kernel reads share the same (contiguous) layout
         if not (

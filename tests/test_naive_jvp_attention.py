@@ -208,22 +208,41 @@ def test_partial_dual_inputs(use_naive: bool, active_tangent: str) -> None:
         assert not torch.isnan(o_t).any()
 
 
-def test_apply_interface() -> None:
-    """`JVPAttn.apply` returns the kernel's (output, context) structure."""
+@pytest.mark.parametrize("use_naive", [True, False])
+@pytest.mark.parametrize("n_ctx", [17, N])
+def test_apply_interface(use_naive: bool, n_ctx: int) -> None:
+    """`JVPAttn.apply` normalizes tangents, contiguity, and padding across backends."""
 
-    q_p, k_p, v_p, q_t, k_t, v_t, _ = make_qkv_tangents_target(torch.float32)
-    expected = JVPAttn.fwd(q_p, k_p, v_p)
-    args = (None, 0.0, False, None, True, True, True, True)
+    if not use_naive and not (HAS_TRITON and torch.cuda.is_available()):
+        pytest.skip("requires Triton on a CUDA device")
 
-    out, ctx = JVPAttn.apply(q_p, k_p, v_p, None, None, None, *args)
+    q_p, k_p, v_p, q_t, k_t, v_t, target = make_qkv_tangents_target(torch.float32, n_ctx)
+    expected = JVPAttn.fwd(q_p, k_p, v_p, USE_NAIVE=True)
+    args = (None, 0.0, False, None, True, True, True, use_naive)
+
+    q_nc = q_p.transpose(1, 2).contiguous().transpose(1, 2).requires_grad_()
+    k_nc = k_p.transpose(1, 2).contiguous().transpose(1, 2).requires_grad_()
+    v_nc = v_p.transpose(1, 2).contiguous().transpose(1, 2).requires_grad_()
+    out, ctx = JVPAttn.apply(q_nc, k_nc, v_nc, None, None, None, *args)
     assert ctx[0] is None
-    assert ctx[1].shape == (Z, H, N)  # Base-2 log-sum-exp
-    torch.testing.assert_close(out, expected, atol=1e-6, rtol=1e-6)
+    assert ctx[1].shape == (Z, H, n_ctx)  # Base-2 log-sum-exp
+    torch.testing.assert_close(out, expected, atol=ATOL[torch.float32], rtol=RTOL)
+    ((out - target) ** 2).mean().backward()
+    assert q_nc.grad is not None and k_nc.grad is not None and v_nc.grad is not None
 
-    out, ctx = JVPAttn.apply(q_p, k_p, v_p, q_t, k_t, v_t, *args)
-    _, expected_tangent = torch.func.jvp(JVPAttn.fwd_dual, (q_p, k_p, v_p), (q_t, k_t, v_t))
-    torch.testing.assert_close(out, expected, atol=1e-6, rtol=1e-6)
-    torch.testing.assert_close(ctx[0], expected_tangent, atol=1e-6, rtol=1e-6)
+    for tangents in (
+        (q_t, k_t, v_t),
+        (None, k_t, None),
+        (None, None, v_t),
+    ):
+        out, ctx = JVPAttn.apply(q_p, k_p, v_p, *tangents, *args)
+        jvp_tangents = tuple(torch.zeros_like(q_p) if t is None else t for t in tangents)
+        _, expected_tangent = torch.func.jvp(
+            partial(JVPAttn.fwd_dual, USE_NAIVE=True), (q_p, k_p, v_p), jvp_tangents
+        )
+        torch.testing.assert_close(out, expected, atol=ATOL[torch.float32], rtol=RTOL)
+        assert ctx[0] is not None and ctx[0].shape == (Z, H, n_ctx, D)
+        torch.testing.assert_close(ctx[0], expected_tangent, atol=ATOL[torch.float32], rtol=RTOL)
 
 
 def test_lse_matches_logsumexp() -> None:
@@ -588,4 +607,44 @@ def test_short_sequences_match_sdpa(n_ctx: int, mask_kind: str | None, causal: b
 
     assert_close_metrics(
         (out, q.grad, k.grad, v.grad), (ref, q_ref.grad, k_ref.grad, v_ref.grad), dtype
+    )
+
+
+@pytest.mark.parametrize("use_naive", [True, False])
+@pytest.mark.parametrize("n_ctx", [17, N])
+def test_torch_compile_jvp(use_naive: bool, n_ctx: int) -> None:
+    """`torch.compile(fullgraph=True)` traces `torch.func.jvp` over `JVPAttn.fwd_dual` (PR #18)."""
+
+    if not use_naive and not (HAS_TRITON and torch.cuda.is_available()):
+        pytest.skip("requires Triton on a CUDA device")
+
+    q_p, k_p, v_p, _, k_t, _, target = make_qkv_tangents_target(torch.float32, n_ctx)
+
+    def attn_only_k(k_in: Tensor) -> Tensor:
+        return JVPAttn.fwd_dual(q_p, k_in, v_p, causal=True, USE_NAIVE=use_naive)
+
+    o_ref, ot_ref = torch.func.jvp(attn_only_k, (k_p,), (k_t,))
+
+    @torch.compile(fullgraph=True)
+    def compiled_jvp(kt_in: Tensor) -> tuple[Tensor, Tensor]:
+        return torch.func.jvp(attn_only_k, (k_p,), (kt_in,))
+
+    o_c, ot_c = compiled_jvp(k_t)
+    assert_close_metrics((o_c, ot_c), (o_ref, ot_ref), torch.float32)
+
+    compiled_fwd = torch.compile(
+        partial(JVPAttn.fwd, causal=True, USE_NAIVE=use_naive),
+        backend="aot_eager",
+    )
+    q, k, v = (t.clone().requires_grad_() for t in (q_p, k_p, v_p))
+    out = compiled_fwd(q, k, v)
+    ((out - target) ** 2).mean().backward()
+
+    q_ref, k_ref, v_ref = (t.clone().requires_grad_() for t in (q_p, k_p, v_p))
+    ref = JVPAttn.fwd(q_ref, k_ref, v_ref, causal=True, USE_NAIVE=True)
+    ((ref - target) ** 2).mean().backward()
+    assert_close_metrics(
+        (out, q.grad, k.grad, v.grad),
+        (ref, q_ref.grad, k_ref.grad, v_ref.grad),
+        torch.float32,
     )
