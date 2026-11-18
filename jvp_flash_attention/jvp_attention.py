@@ -193,18 +193,14 @@ def pad_to_length(t: Tensor, length: int, left: bool = False) -> Tensor:
 
 def min_padded_length(seq_len: int, min_sequence_length: int = MIN_SEQUENCE_LENGTH) -> int:
     """-> the smallest multiple of min_sequence_length that is >= seq_len."""
-    return (
-        (seq_len + min_sequence_length - 1) // min_sequence_length
-    ) * min_sequence_length
+    return ((seq_len + min_sequence_length - 1) // min_sequence_length) * min_sequence_length
 
 
 def pad_mode_for(
     n_q: int, n_kv: int, has_mask: bool, min_sequence_length: int = MIN_SEQUENCE_LENGTH
 ) -> str | None:
     """-> "left", "right", or None, depending on whether/where padding is needed."""
-    needs_pad = (
-        n_q != n_kv or n_q < min_sequence_length or n_q % min_sequence_length != 0
-    )
+    needs_pad = n_q != n_kv or n_q < min_sequence_length or n_q % min_sequence_length != 0
     if not needs_pad:
         return None
     return "right" if has_mask else "left"
@@ -2679,12 +2675,12 @@ class JVPAttn(Function):
             `RuntimeWarning: overflow encountered in exp2.`
 
         Args:
-            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
-            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K).
-            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V).
-            q_t: Optional tensor for query transpose.
-            k_t: Optional tensor for key transpose.
-            v_t: Optional tensor for value transpose.
+            q: Query tensor of shape (Z, H, N_Q, HEAD_DIM_Q).
+            k: Key tensor of shape (Z, H, N_KV, HEAD_DIM_K) with N_KV >= N_Q.
+            v: Value tensor of shape (Z, H, N_KV, HEAD_DIM_V) with N_KV >= N_Q.
+            q_t: Optional tangent tensor for query.
+            k_t: Optional tangent tensor for key.
+            v_t: Optional tangent tensor for value.
             attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX).
                 Two types of masks are supported. A boolean mask where a value
                 of True indicates that the element should take part in attention,
@@ -3159,10 +3155,10 @@ class JVPAttn(Function):
         (e.g., due to an `unbind` call to create `q`, `k`, `v`) but nonetheless may incur a performance cost.
 
         Args:
-            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
-            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K).
-            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V).
-            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
+            q: Query tensor of shape (Z, H, N_Q, HEAD_DIM_Q).
+            k: Key tensor of shape (Z, H, N_KV, HEAD_DIM_K) with N_KV >= N_Q.
+            v: Value tensor of shape (Z, H, N_KV, HEAD_DIM_V) with N_KV >= N_Q.
+            attn_mask: Optional attention mask of shape (Z, H, N_Q, N_KV) (requires N_Q == N_KV). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
             dropout_p: Dropout probability.
             causal: Whether to use causal attention.
             sm_scale: The softmax scale factor.
@@ -3226,10 +3222,10 @@ class JVPAttn(Function):
         (e.g., due to an `unbind` call to create `q`, `k`, `v`) but nonetheless may incur a performance cost.
 
         Args:
-            q: Query tensor of shape (Z, H, N_CTX, HEAD_DIM_Q).
-            k: Key tensor of shape (Z, H, N_CTX, HEAD_DIM_K).
-            v: Value tensor of shape (Z, H, N_CTX, HEAD_DIM_V).
-            attn_mask: Optional attention mask of shape (Z, H, N_CTX, N_CTX). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
+            q: Query tensor of shape (Z, H, N_Q, HEAD_DIM_Q).
+            k: Key tensor of shape (Z, H, N_KV, HEAD_DIM_K) with N_KV >= N_Q.
+            v: Value tensor of shape (Z, H, N_KV, HEAD_DIM_V) with N_KV >= N_Q.
+            attn_mask: Optional attention mask of shape (Z, H, N_Q, N_KV) (requires N_Q == N_KV). Two types of masks are supported. A boolean mask where a value of True indicates that the element should take part in attention, or a float mask of the same type as query, key, value that is added to the attention score.
             dropout_p: Dropout probability.
             causal: Whether to use causal attention.
             sm_scale: The softmax scale factor.

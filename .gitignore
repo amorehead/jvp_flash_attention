@@ -210,5 +210,6 @@ __marimo__/
 .vscode/
 
 # Unit tests
+.benchmarks/
 /tests/*.json
 /tests/*.png

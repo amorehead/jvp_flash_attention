@@ -1,6 +1,6 @@
 [project]
 name = "jvp_flash_attention"
-version = "0.14.0"
+version = "0.15.0"
 description = "Flash Attention Triton kernel with support for second-order derivatives"
 authors = [
     { name = "Alex Morehead", email = "alex.morehead@gmail.edu" }
@@ -36,6 +36,7 @@ Repository = "https://github.com/amorehead/jvp-flash-attention"
 
 [project.optional-dependencies]
 lint = ["pre-commit>=4.3.0"]
+test = ["pytest>=8.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -62,8 +63,9 @@ markers = [
 minversion = "6.0"
 testpaths = "tests/"
 
-# Assuming you're developing for Python 3.10
-target-version = "py310"
+[tool.black]
+line-length = 99
+target-version = ["py310"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

@@ -16,14 +16,17 @@ MASK_CONST = -1.0e2  # large negative additive-mask constant
 
 
 def exists(val) -> bool:
+    """Return True if `val` is not None."""
     return val is not None
 
 
 def default_dtype(t: Tensor) -> torch.dtype:
+    """Return a floating-point accumulation dtype (`float32` or `float64`) for `t`."""
     return t.dtype if t.dtype in (torch.float32, torch.float64) else torch.float32
 
 
 def _is_compiling() -> bool:
+    """Return True when currently tracing under `torch.compile`."""
     try:
         return torch.compiler.is_compiling()
     except Exception:
@@ -40,7 +43,7 @@ def validate_attn_mask(mask: Tensor, q: Tensor, k: Tensor | None = None) -> None
         h,
         n_q,
         n_kv,
-    ), "The attention mask must have shape (Z, H, N_CTX, N_CTX)."
+    ), "The attention mask must have shape (Z, H, N_Q, N_KV)."
     assert mask.dtype in (
         torch.bool,
         q.dtype,
@@ -188,7 +191,9 @@ def tiled_attention(
 
             # Softmax and lse are shift-invariant to the running max, so detach it from AD.
             # Guard all-(-inf) tiles with 0.0 so exp2(-inf - m_ij_safe) evaluates to 0, not NaN.
-            m_ij = fwAD.unpack_dual(torch.maximum(m, scores.amax(dim=-1, keepdim=True)))[0].detach()
+            m_ij = fwAD.unpack_dual(torch.maximum(m, scores.amax(dim=-1, keepdim=True)))[
+                0
+            ].detach()
             m_ij_safe = torch.where(m_ij == float("-inf"), 0.0, m_ij)
 
             p = torch.exp2(scores - m_ij_safe)
@@ -200,9 +205,7 @@ def tiled_attention(
             if enable_jvp:
                 if has_qk_tangent:
                     t_scores = (
-                        einsum("z h i d, z h j d -> z h i j", qt_chunk, k_chunk)
-                        if has_qt
-                        else 0.0
+                        einsum("z h i d, z h j d -> z h i j", qt_chunk, k_chunk) if has_qt else 0.0
                     )
                     if has_kt:
                         t_scores = t_scores + einsum(
@@ -334,6 +337,7 @@ class _NaiveJVPAttn(Function):
         q_bucket_size: int,
         k_bucket_size: int,
     ) -> tuple[Tensor, tuple[Tensor | None, Tensor]]:
+        """Run tiled forward attention (and optional JVP tangents) over `(q, k, v)`."""
         o, o_t, lse = tiled_attention(
             q,
             k,
@@ -352,9 +356,21 @@ class _NaiveJVPAttn(Function):
 
     @staticmethod
     def setup_context(ctx, inputs, outputs) -> None:
-        q, k, v, _, _, _, mask_tensor, MASK_TYPE, causal, sm_scale, q_bucket_size, k_bucket_size = (
-            inputs
-        )
+        """Save tensors and scalar configuration for forward-AD and backward passes."""
+        (
+            q,
+            k,
+            v,
+            _,
+            _,
+            _,
+            mask_tensor,
+            MASK_TYPE,
+            causal,
+            sm_scale,
+            q_bucket_size,
+            k_bucket_size,
+        ) = inputs
         o, (o_t, lse) = outputs
         ctx.save_for_forward(o_t)
         ctx.save_for_backward(q, k, v, o, lse)
@@ -367,10 +383,12 @@ class _NaiveJVPAttn(Function):
 
     @staticmethod
     def jvp(ctx, gq, gk, gv, *_) -> tuple[Tensor | None, None]:
+        """Return the precomputed forward-AD output tangent."""
         return ctx.saved_for_forward[0], None
 
     @staticmethod
     def backward(ctx, do, _):
+        """Compute input gradients `(dq, dk, dv)` via tiled recomputation."""
         q, k, v, o, lse = ctx.saved_tensors
         if torch.is_grad_enabled():
             o, _, lse = tiled_attention(

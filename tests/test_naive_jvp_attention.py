@@ -285,7 +285,7 @@ def test_bucket_size_invariance(n_ctx: int) -> None:
 def test_arbitrary_seq_lens(
     n_ctx: int, q_bucket_size: int, k_bucket_size: int, mask_kind: str | None, causal: bool
 ) -> None:
-    """Any even length >= 32 works, whether or not the tile size divides it."""
+    """Arbitrary sequence lengths >= 1 work, whether or not the tile size divides them."""
 
     dtype = torch.float32
     q_p, k_p, v_p, q_t, k_t, v_t, target = make_qkv_tangents_target(dtype, n_ctx)
